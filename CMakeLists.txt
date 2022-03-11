@@ -22,22 +22,23 @@ pkg_check_modules(PKGDEPS REQUIRED ${PKGDEPS})
 
 include_directories(${PKGDEPS_INCLUDE_DIRS})
 
+add_subdirectory("${PROJECT_SOURCE_DIR}/lib/log")
+add_subdirectory("${PROJECT_SOURCE_DIR}/lib/xptools")
+
 add_executable(scopehal-sigrock-bridge
 	src/main.cpp
 	src/srbinding.cpp
+	src/server.cpp
 )
 
 link_directories(${PKGDEPS_LIBRARY_DIRS})
 target_link_libraries(scopehal-sigrock-bridge
 	${PKGDEPS_LIBRARIES}
+	xptools
+	log
 )
-
-set(CMAKE_INSTALL_RPATH "/usr/local/lib")
-set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-
-add_subdirectory("${PROJECT_SOURCE_DIR}/lib/logtools")
-add_subdirectory("${PROJECT_SOURCE_DIR}/lib/xptools")
 
 target_include_directories(scopehal-sigrock-bridge PRIVATE
 	lib/
 )
+

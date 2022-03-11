@@ -8,7 +8,10 @@
 
 #include <libsigrok4DSL/libsigrok.h>
 
+#include "log/log.h"
+
 #include "srbinding.h"
+#include "server.h"
 
 void callback (const struct sr_dev_inst *sdi, const struct sr_datafeed_packet *packet, void *cb_data) {
 	(void) sdi;
@@ -17,16 +20,16 @@ void callback (const struct sr_dev_inst *sdi, const struct sr_datafeed_packet *p
 	if (packet->type == SR_DF_DSO) {
 		struct sr_datafeed_dso* dso = (struct sr_datafeed_dso*)packet->payload;
 		int num_samples = dso->num_samples;
-		printf("Received %d samples\n", num_samples);
+		LogDebug("Received %d samples\n", num_samples);
 
 		uint8_t* buf = (uint8_t*) dso->data;
 
-		for (int j = 0; j < 10; j++) {
-			for (int i = 0; i < 40; i++) {
+		for (int j = 0; j < 2; j++) {
+			for (int i = 0; i < 16; i++) {
 				int c = *(buf+=1) - (1<<7);
-				printf("%+02d ", c);
+				LogDebug("%+02d ", c);
 			}
-			printf("\n");
+			LogDebug("\n");
 		}
 	}
 }
@@ -55,9 +58,12 @@ int main(int argc, char* argv[])
 {
 	(void) argc; (void) argv;
 
+	Severity console_verbosity = Severity::DEBUG;
+	g_log_sinks.emplace(g_log_sinks.begin(), new ColoredSTDLogSink(console_verbosity));
+
 	chdir("/usr/local/share/DSView/res/");
 
-	printf("libsigrok4DSL ver: '%s'\n", sr_package_version_string_get());
+	LogNotice("libsigrok4DSL ver: '%s'\n", sr_package_version_string_get());
 	// sr_log_loglevel_set(4);
 	   //    0   None
 	   //    1   Error
@@ -69,13 +75,13 @@ int main(int argc, char* argv[])
 	struct sr_context* context;
 	int err;
 	if ((err = sr_init(&context)) != SR_OK) {
-		printf("Failed to initialize libsigrok4DSL: %d\n", err);
+		LogError("Failed to initialize libsigrok4DSL: %d\n", err);
 		return err;
 	}
 
 	struct sr_dev_driver* sel_driver;
 
-	const char* wanted_driver = "virtual-demo";
+	const char* wanted_driver = "DSCope";
 	// virtual-demo, DSLogic, DSCope
 
 	sr_dev_driver **const drivers = sr_driver_list();
@@ -87,11 +93,11 @@ int main(int argc, char* argv[])
 	}
 
 	if (sr_driver_init(context, sel_driver) != SR_OK) {
-		printf("Failed to initialize driver %s\n", sel_driver->name);
+		LogError("Failed to initialize driver %s\n", sel_driver->name);
 		return 1;
 	}
 
-	printf("Selected driver %s, scanning...\n", sel_driver->name);
+	LogNotice("Selected driver %s, scanning...\n", sel_driver->name);
 
 	GSList *const devices = sr_driver_scan(sel_driver, NULL);
 
@@ -99,25 +105,25 @@ int main(int argc, char* argv[])
 
 	for (GSList *l = devices; l; l = l->next) {
         device = (sr_dev_inst*)l->data;
-        printf("Found device: %s %s\n", device->vendor, device->model);
+        LogNotice("Found device: %s - %s\n", device->vendor, device->model);
     }
 
     if (!device) {
-    	printf("Found no device\n");
+    	LogError("Found no device\n");
     	return 1;
     }
      
 	g_slist_free(devices);
 
 	if ((err = sr_dev_open(device)) != SR_OK) {
-		printf("Failed to sr_dev_open device: %d\n", err);
+		LogError("Failed to sr_dev_open device: %d\n", err);
 		return 1;
 	}
 
 	struct sr_session* session = sr_session_new();
 
 	if ((err = sr_session_dev_add(device)) != SR_OK) {
-		printf("Failed to add device to session\n");
+		LogError("Failed to add device to session\n");
 		return 1;
 	}
 
@@ -142,41 +148,41 @@ int main(int argc, char* argv[])
 
     for (auto ch : channels) {
     	bool en = get_probe_config<bool>(device, ch, SR_CONF_PROBE_EN).value();
-    	printf("Ch %s: %s\n", ch->name, en?"ENABLED":"DISABLED");
+    	LogDebug("Ch %s: %s\n", ch->name, en?"ENABLED":"DISABLED");
     	if (en) {
     		std::vector<uint64_t> vdivs;
     		populate_vdivs(device, vdivs);
     		for (uint64_t i : vdivs) {
-    			printf(" - vdiv option: %lu\n", i);
+    			LogDebug(" - vdiv option: %lu\n", i);
     		}
 
     		uint64_t active = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_VDIV).value();
-    		printf("Active: %lu\n", active);
+    		LogDebug("Active: %lu\n", active);
     	}
     }
 
 	int bitdepth = get_dev_config<uint8_t>(device, SR_CONF_UNIT_BITS).value();
-	printf("Bit depth: %d\n", bitdepth);
+	LogDebug("Bit depth: %d\n", bitdepth);
 
 	set_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE, 5000);
 
 	uint64_t samplerate = get_probe_config<uint64_t>(device, NULL, SR_CONF_SAMPLERATE).value();
-	printf("Sample Rate: %lu\n", samplerate);
+	LogDebug("Sample Rate: %lu\n", samplerate);
 
 	int refmin = get_dev_config<uint32_t>(device, SR_CONF_REF_MIN).value_or(-1);
 	int refmax = get_dev_config<uint32_t>(device, SR_CONF_REF_MAX).value_or(-1);
-	printf("Ref min/max: %d/%d\n", refmin, refmax);
+	LogDebug("Ref min/max: %d/%d\n", refmin, refmax);
 
-	sleep(1);
+	run_server(device, 4000);
 
-	if ((err = sr_session_start()) != SR_OK) {
-		printf("session_start returned failure: %d\n", err);
-		return 1;
-	}
-	if ((err = sr_session_run()) != SR_OK) {
-		printf("session_run returned failure: %d\n", err);
-		return 1;
-	}
+	// if ((err = sr_session_start()) != SR_OK) {
+	// 	LogError("session_start returned failure: %d\n", err);
+	// 	return 1;
+	// }
+	// if ((err = sr_session_run()) != SR_OK) {
+	// 	LogError("session_run returned failure: %d\n", err);
+	// 	return 1;
+	// }
 
 	(void) session;
 
