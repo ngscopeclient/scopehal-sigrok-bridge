@@ -291,30 +291,13 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 		assert(numbits == 8);
 
-		for (int p = 0; p < num_samples; p++) {
-			int8_t* pp = (int8_t*)(buf + p);
-
-			*pp = *(buf + p) - 127;
-
-			// TODO: This is slow and can't be the best way
-		}
-
 		float vdiv_mV = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_VDIV).value();
 		float hwmin = get_dev_config<uint32_t>(device, SR_CONF_REF_MIN).value_or(0);
 		float hwmax = get_dev_config<uint32_t>(device, SR_CONF_REF_MAX).value_or((1 << numbits) - 1);
-		float full_throw_V = vdiv_mV / 1000 * g_numdivs; // Volts indicated by most-positive value (255)
-		float hwrange_factor = (255.f / (hwmax - hwmin));
-		float scale = 1 / 255.f * full_throw_V;
-		float offset = 0;//127 * scale; // hwmin?
-
-		// (X - 127) * S -> X * S - 127 * S
-
-		int8_t* p = (int8_t*)(buf + 100);
-		int8_t* p2 = (int8_t*)(buf + 5100);
-		float v = *p;//(int)((*p) - 127);
-		float vc = *p2;
-		LogDebug("vdiv_mV = %f, ft_V=%f, scale=%f, off=%f\n", vdiv_mV, full_throw_V, scale, offset);
-		LogDebug(" ... v=%d -> %f   ;; vc=%d -> %f\n", (int)v, v*scale - offset, (int)vc, vc*scale - offset);
+		float full_throw_V = vdiv_mV / 1000 * g_numdivs;  // Volts indicated by most-positive value (255)
+		float hwrange_factor = (255.f / (hwmax - hwmin)); // Adjust for incomplete range of ADC reports
+		float scale = hwrange_factor / 255.f * full_throw_V;
+		float offset = 127 * scale; // Zero is 127
 
 		float trigphase = 0;
 
