@@ -13,47 +13,6 @@
 #include "srbinding.h"
 #include "server.h"
 
-void callback (const struct sr_dev_inst *sdi, const struct sr_datafeed_packet *packet, void *cb_data) {
-	(void) sdi;
-	(void) cb_data;
-
-	if (packet->type == SR_DF_DSO) {
-		struct sr_datafeed_dso* dso = (struct sr_datafeed_dso*)packet->payload;
-		int num_samples = dso->num_samples;
-		LogDebug("Received %d samples\n", num_samples);
-
-		uint8_t* buf = (uint8_t*) dso->data;
-
-		for (int j = 0; j < 2; j++) {
-			for (int i = 0; i < 16; i++) {
-				int c = *(buf+=1) - (1<<7);
-				LogDebug("%+02d ", c);
-			}
-			LogDebug("\n");
-		}
-	}
-}
-
-void populate_vdivs(const struct sr_dev_inst *sdi, std::vector<uint64_t>& vec) {
-	GVariant *gvar_list, *gvar_list_vdivs;
-    if (sr_config_list(sdi->driver, sdi,
-                       NULL, SR_CONF_PROBE_VDIV, &gvar_list) == SR_OK) {
-        assert(gvar_list);
-        if ((gvar_list_vdivs = g_variant_lookup_value(gvar_list,
-                "vdivs", G_VARIANT_TYPE("at")))) {
-            GVariant *gvar;
-            GVariantIter iter;
-            g_variant_iter_init(&iter, gvar_list_vdivs);
-            while(NULL != (gvar = g_variant_iter_next_value(&iter))) {
-                vec.push_back(g_variant_get_uint64(gvar));
-                g_variant_unref(gvar);
-            }
-            g_variant_unref(gvar_list_vdivs);
-            g_variant_unref(gvar_list);
-        }
-    }
-}
-
 int main(int argc, char* argv[])
 {
 	(void) argc; (void) argv;
@@ -127,8 +86,6 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	sr_session_datafeed_callback_add(callback, NULL);
-
 	ds_trigger_init();
 
 	std::vector<struct sr_channel*> channels;
@@ -143,46 +100,41 @@ int main(int argc, char* argv[])
     	set_probe_config<bool>(device, ch, SR_CONF_PROBE_EN, ch == ch0);
     }
 
-    set_probe_config<uint64_t>(device, ch0, SR_CONF_PROBE_VDIV, 100);
-    set_probe_config<uint8_t>(device, ch0, SR_CONF_PROBE_COUPLING, SR_AC_COUPLING);
+ //    set_probe_config<uint64_t>(device, ch0, SR_CONF_PROBE_VDIV, 500);
+ //    set_probe_config<uint8_t>(device, ch0, SR_CONF_PROBE_COUPLING, SR_AC_COUPLING);
 
-    for (auto ch : channels) {
-    	bool en = get_probe_config<bool>(device, ch, SR_CONF_PROBE_EN).value();
-    	LogDebug("Ch %s: %s\n", ch->name, en?"ENABLED":"DISABLED");
-    	if (en) {
-    		std::vector<uint64_t> vdivs;
-    		populate_vdivs(device, vdivs);
-    		for (uint64_t i : vdivs) {
-    			LogDebug(" - vdiv option: %lu\n", i);
-    		}
+ //    for (auto ch : channels) {
+ //    	bool en = get_probe_config<bool>(device, ch, SR_CONF_PROBE_EN).value();
+ //    	LogDebug("Ch %s: %s\n", ch->name, en?"ENABLED":"DISABLED");
+ //    	if (en) {
+ //    		std::vector<uint64_t> vdivs;
+ //    		populate_vdivs(device, vdivs);
+ //    		for (uint64_t i : vdivs) {
+ //    			LogDebug(". - VDiv option: %lu (mV)\n", i);
+ //    		}
 
-    		uint64_t active = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_VDIV).value();
-    		LogDebug("Active: %lu\n", active);
-    	}
-    }
+ //    		uint64_t active = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_VDIV).value();
+ //    		LogDebug(".Active VDiv: %lu (mV)\n", active);
+
+ //    		uint16_t off = get_probe_config<uint16_t>(device, ch, SR_CONF_PROBE_OFFSET).value();
+ //    		LogDebug(".Offset: %d\n", off);
+
+ //    		uint16_t hwoff = get_probe_config<uint16_t>(device, ch, SR_CONF_PROBE_HW_OFFSET).value();
+ //    		LogDebug(".HWOffset: %d\n", hwoff);
+
+ //    		uint64_t factor = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_FACTOR).value();
+ //    		LogDebug(".Factor: %lu\n", factor);
+ //    	}
+ //    }
 
 	int bitdepth = get_dev_config<uint8_t>(device, SR_CONF_UNIT_BITS).value();
 	LogDebug("Bit depth: %d\n", bitdepth);
 
-	set_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE, 5000);
-
-	uint64_t samplerate = get_probe_config<uint64_t>(device, NULL, SR_CONF_SAMPLERATE).value();
-	LogDebug("Sample Rate: %lu\n", samplerate);
-
-	int refmin = get_dev_config<uint32_t>(device, SR_CONF_REF_MIN).value_or(-1);
-	int refmax = get_dev_config<uint32_t>(device, SR_CONF_REF_MAX).value_or(-1);
-	LogDebug("Ref min/max: %d/%d\n", refmin, refmax);
+	// int refmin = get_dev_config<uint32_t>(device, SR_CONF_REF_MIN).value_or(-1);
+	// int refmax = get_dev_config<uint32_t>(device, SR_CONF_REF_MAX).value_or(-1);
+	// LogDebug("Ref min/max: %d/%d\n", refmin, refmax);
 
 	run_server(device, 4000);
-
-	// if ((err = sr_session_start()) != SR_OK) {
-	// 	LogError("session_start returned failure: %d\n", err);
-	// 	return 1;
-	// }
-	// if ((err = sr_session_run()) != SR_OK) {
-	// 	LogError("session_run returned failure: %d\n", err);
-	// 	return 1;
-	// }
 
 	(void) session;
 

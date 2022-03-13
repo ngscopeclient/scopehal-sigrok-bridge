@@ -6,18 +6,18 @@
 #include <optional>
 
 template <typename T>
-std::optional<T> get_probe_config(struct sr_dev_inst* dev, struct sr_channel* ch, int key);
+std::optional<T> get_probe_config(const struct sr_dev_inst* dev, const struct sr_channel* ch, int key);
 
 template <typename T>
-bool set_probe_config(struct sr_dev_inst* dev, struct sr_channel* ch, int key, T value);
+bool set_probe_config(const struct sr_dev_inst* dev, const struct sr_channel* ch, int key, T value);
 
 template <typename T>
-static inline std::optional<T> get_dev_config(struct sr_dev_inst* dev, int key) {
+static inline std::optional<T> get_dev_config(const struct sr_dev_inst* dev, int key) {
 	return get_probe_config<T>(dev, NULL, key);
 }
 
 template <typename T>
-static inline bool set_dev_config(struct sr_dev_inst* dev, int key, T value) {
+static inline bool set_dev_config(const struct sr_dev_inst* dev, int key, T value) {
 	return set_probe_config<T>(dev, NULL, key, value);
 }
 

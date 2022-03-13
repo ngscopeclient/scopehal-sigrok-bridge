@@ -13,9 +13,9 @@
 
 #define X_MAKE_SPEC(CTYPE, GTYPELIT, GTYPEFUNC) \
 template <>\
-std::optional<CTYPE> get_probe_config<CTYPE>(struct sr_dev_inst* dev, struct sr_channel* ch, int key) {\
+std::optional<CTYPE> get_probe_config<CTYPE>(const struct sr_dev_inst* dev, const struct sr_channel* ch, int key) {\
 	GVariant* gvar = NULL;\
-	sr_config_get(dev->driver, dev, ch, NULL, key, &gvar);\
+	sr_config_get(dev->driver, (struct sr_dev_inst*) dev, (struct sr_channel*) ch, NULL, key, &gvar);\
 	if (gvar != NULL && g_variant_is_of_type(gvar, G_VARIANT_TYPE_##GTYPELIT)) {\
         CTYPE result = g_variant_get_##GTYPEFUNC(gvar);\
         g_variant_unref(gvar);\
@@ -27,9 +27,9 @@ std::optional<CTYPE> get_probe_config<CTYPE>(struct sr_dev_inst* dev, struct sr_
 }\
 \
 template <>\
-bool set_probe_config<CTYPE>(struct sr_dev_inst* dev, struct sr_channel* ch, int key, CTYPE value) {\
+bool set_probe_config<CTYPE>(const struct sr_dev_inst* dev, const struct sr_channel* ch, int key, CTYPE value) {\
 	GVariant* gvar = g_variant_new_##GTYPEFUNC(value);\
-	int err = sr_config_set(dev, ch, NULL, key, gvar);\
+	int err = sr_config_set((struct sr_dev_inst*) dev, (struct sr_channel*) ch, NULL, key, gvar);\
 \
 	return err != 0;\
 }
