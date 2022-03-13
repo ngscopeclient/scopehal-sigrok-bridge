@@ -10,6 +10,7 @@
 #include <vector>
 #include <thread>
 #include <cassert>
+#include <semaphore>
 
 #include <stdlib.h>
 
@@ -111,31 +112,11 @@ void ParseScpiLine(const string& line, string& subject, string& cmd, bool& query
 	}
 }
 
-volatile bool g_waveformThreadQuit = false;
-
 std::vector<struct sr_channel*> g_channels;
-std::vector<uint64_t> g_vdiv_options;
 int g_numdivs;
 
-void populate_vdivs(const struct sr_dev_inst *sdi, std::vector<uint64_t>& vec) {
-	GVariant *gvar_list, *gvar_list_vdivs;
-    if (sr_config_list(sdi->driver, sdi,
-                       NULL, SR_CONF_PROBE_VDIV, &gvar_list) == SR_OK) {
-        assert(gvar_list);
-        if ((gvar_list_vdivs = g_variant_lookup_value(gvar_list,
-                "vdivs", G_VARIANT_TYPE("at")))) {
-            GVariant *gvar;
-            GVariantIter iter;
-            g_variant_iter_init(&iter, gvar_list_vdivs);
-            while(NULL != (gvar = g_variant_iter_next_value(&iter))) {
-                vec.push_back(g_variant_get_uint64(gvar));
-                g_variant_unref(gvar);
-            }
-            g_variant_unref(gvar_list_vdivs);
-            g_variant_unref(gvar_list);
-        }
-    }
-}
+bool g_runAcq;
+bool g_triggerOneShot;
 
 void run_server(struct sr_dev_inst *device, int scpi_port) {
 	for (GSList *l = device->channels; l; l = l->next) {
@@ -146,7 +127,25 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
     g_numdivs = DS_CONF_DSO_VDIVS;
 	// TODO: SR_CONF_NUM_VDIV instead of DS_CONF_DSO_VDIVS on regular sigrok
 
-	populate_vdivs(device, g_vdiv_options);
+	std::vector<uint64_t> vdiv_options = get_dev_config_options<uint64_t>(device, SR_CONF_PROBE_VDIV);
+	std::vector<uint64_t> rate_options = get_dev_config_options<uint64_t>(device, SR_CONF_SAMPLERATE);
+
+	string samplerates_string;
+	for (auto i : rate_options) {
+		samplerates_string += to_string(i) + ",";
+	}
+
+	uint64_t curr_bufsz = get_dev_config<uint64_t>(device, SR_CONF_LIMIT_SAMPLES).value();
+
+	// Driver does not report discrete steps; make some up
+	string depths_string;
+	int step = 250000;
+	for (uint64_t i = step; i <= curr_bufsz; i += step) {
+		depths_string += to_string(i) + ",";
+	}
+
+	LogDebug("Report available sample rates: %s\n", samplerates_string.c_str());
+	LogDebug("Report available buffer depths: %s\n", depths_string.c_str());
 
 	//Launch the control plane socket server
 	g_scpiSocket.Bind(scpi_port);
@@ -178,13 +177,12 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 			if(!ScpiRecv(client, line))
 				break;
 
-			// LogDebug("Receive: %s\n", line.c_str());
-
 			string subject, cmd;
 			bool query;
 			vector<string> args;
 			ParseScpiLine(line, subject, cmd, query, args);
 
+			// LogDebug("Receive: %s\n", line.c_str());
 			// LogDebug("Parsed: s='%s', c='%s', q=%d, a=[", subject.c_str(), cmd.c_str(), query);
 			// for (auto i : args) {
 			// 	LogDebug("'%s',", i.c_str());
@@ -217,12 +215,19 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 					ScpiSend(client, string("DreamSourceLabs (bridge),") + device->model + ",NOSERIAL,NOVERSION");
 				else if (cmd == "CHANS")
 					ScpiSend(client, to_string(2));
+				else if (cmd == "RATES")
+					ScpiSend(client, samplerates_string);
+				else if (cmd == "DEPTHS")
+					ScpiSend(client, depths_string);
 				else
 					LogWarning("Unknown or malformed query: %s\n", line.c_str());
 			}
 			else
 			{
-				if (cmd == "COUP" && subj_ch && args.size() == 1) {
+				if ((cmd == "ON" || cmd == "OFF") && subj_ch && args.size() == 0) {
+					set_probe_config<bool>(device, subj_ch, SR_CONF_PROBE_EN, cmd == "ON");
+					LogDebug("Updated enabled for ch%s, now %s\n", subject.c_str(), cmd.c_str());
+				} else if (cmd == "COUP" && subj_ch && args.size() == 1) {
 					string coup_str = args[0];
 					uint8_t sr_coupling = -1;
 
@@ -236,25 +241,39 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 					}
 
 					set_probe_config<uint8_t>(device, subj_ch, SR_CONF_PROBE_COUPLING, sr_coupling);
+					LogDebug("Updated coupling for ch%s, now %s\n", subject.c_str(), coup_str.c_str());
 				} else if (cmd == "RANGE" && subj_ch && args.size() == 1) {
 					float range_V = stod(args[0]);
 					float range_mV_per_div = (range_V / g_numdivs) * 1000;
 
-					uint64_t selected = g_vdiv_options[g_vdiv_options.size()];
+					uint64_t selected = vdiv_options[vdiv_options.size()];
 
-					for (auto i : g_vdiv_options) {
+					for (auto i : vdiv_options) {
 						if ((i > selected) && !(i > range_mV_per_div)) {
 							selected = i;
 						}
 					}
 
 					set_probe_config<uint64_t>(device, subj_ch, SR_CONF_PROBE_VDIV, selected);
-					// LogDebug("Wanted %f, result: %lu\n", range_mV_per_div, selected);
-
+					LogDebug("Updated RANGE; Wanted %f, result: %lu\n", range_mV_per_div, selected);
+				} else if (cmd == "OFFS" && subj_ch && args.size() == 1) {
+					LogDebug("Ignored OFFS\n");
 				} else if (cmd == "RATE" && subj_dev && args.size() == 1) {
-					set_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE, stoull(args[0]));
+					uint64_t rate = stoull(args[0]);
+					set_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE, rate);
+					LogDebug("Updated RATE; now %lu\n", rate);
 				} else if (cmd == "DEPTH" && subj_dev && args.size() == 1) {
-					set_dev_config<uint64_t>(device, SR_CONF_LIMIT_SAMPLES, stoull(args[0]));
+					uint64_t depth = stoull(args[0]);
+					set_dev_config<uint64_t>(device, SR_CONF_LIMIT_SAMPLES, depth);
+					LogDebug("Updated DEPTH; now %lu\n", depth);
+				} else if ((cmd == "START" || cmd == "SINGLE") && subj_dev && args.size() == 0) {
+					LogDebug("Starting %s...\n", cmd.c_str());
+					g_triggerOneShot = cmd == "SINGLE";
+					g_runAcq = true;
+				} else if (cmd == "STOP" && subj_dev && args.size() == 0) {
+					LogDebug("Stopping...\n");
+					g_runAcq = 0;
+					sr_session_stop();
 				} else {
 					LogWarning("Unknown or malformed command: %s\n", line.c_str());
 				}
@@ -266,9 +285,25 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafeed_packet *packet, void* client_vp) {
 	Socket* client = (Socket*) client_vp;
 
-	if (packet->type == SR_DF_DSO) {
+	if (!g_runAcq) return;
+
+	if (packet->type == SR_DF_HEADER) {
+		struct sr_datafeed_header* header = (struct sr_datafeed_header*)packet->payload;
+
+	} else if (packet->type == SR_DF_TRIGGER) {
+		struct ds_trigger_pos* trigger = (struct ds_trigger_pos*)packet->payload;
+
+		if (trigger->status & 0x01) {
+            uint32_t trig_pos = trigger->real_pos;
+
+            LogNotice("Trigger packet; position=%d\n", trig_pos);
+		}
+
+	} else if (packet->type == SR_DF_DSO) {
 		struct sr_datafeed_dso* dso = (struct sr_datafeed_dso*)packet->payload;
 		size_t num_samples = dso->num_samples;
+
+		// LogDebug("Yield samples: %lu\n", num_samples);
 
 		uint8_t* buf = (uint8_t*) dso->data;
 
@@ -306,6 +341,12 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 		//Send the actual waveform data
 		client->SendLooped((uint8_t*)buf, num_samples * sizeof(int8_t));
+
+		if (g_triggerOneShot) {
+			LogDebug("Stopping after oneshot\n");
+			g_runAcq = false;
+			sr_session_stop();
+		}
 	}
 }
 
@@ -321,13 +362,23 @@ void WaveformServerThread()
 
 	sr_session_datafeed_callback_add(waveform_callback, &client);
 
-	int err;
-	if ((err = sr_session_start()) != SR_OK) {
-		LogError("session_start returned failure: %d\n", err);
-		return;
-	}
-	if ((err = sr_session_run()) != SR_OK) {
-		LogError("session_run returned failure: %d\n", err);
-		return;
+	for (;;) {
+		while (!g_runAcq) {
+			usleep(10000); //10ms
+		}
+
+		LogDebug("Starting Session...\n");
+
+		int err;
+		if ((err = sr_session_start()) != SR_OK) {
+			LogError("session_start returned failure: %d\n", err);
+			return;
+		}
+		if ((err = sr_session_run()) != SR_OK) {
+			LogError("session_run returned failure: %d\n", err);
+			return;
+		}
+
+		LogDebug("Session Stopped.\n");
 	}
 }

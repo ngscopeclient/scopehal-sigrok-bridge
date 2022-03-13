@@ -88,45 +88,6 @@ int main(int argc, char* argv[])
 
 	ds_trigger_init();
 
-	std::vector<struct sr_channel*> channels;
-	for (GSList *l = device->channels; l; l = l->next) {
-        struct sr_channel* ch = (struct sr_channel*)l->data;
-        channels.push_back(ch);
-    }
-
-    auto ch0 = channels.at(0);
-
-    for(auto ch : channels) {
-    	set_probe_config<bool>(device, ch, SR_CONF_PROBE_EN, ch == ch0);
-    }
-
- //    set_probe_config<uint64_t>(device, ch0, SR_CONF_PROBE_VDIV, 500);
- //    set_probe_config<uint8_t>(device, ch0, SR_CONF_PROBE_COUPLING, SR_AC_COUPLING);
-
- //    for (auto ch : channels) {
- //    	bool en = get_probe_config<bool>(device, ch, SR_CONF_PROBE_EN).value();
- //    	LogDebug("Ch %s: %s\n", ch->name, en?"ENABLED":"DISABLED");
- //    	if (en) {
- //    		std::vector<uint64_t> vdivs;
- //    		populate_vdivs(device, vdivs);
- //    		for (uint64_t i : vdivs) {
- //    			LogDebug(". - VDiv option: %lu (mV)\n", i);
- //    		}
-
- //    		uint64_t active = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_VDIV).value();
- //    		LogDebug(".Active VDiv: %lu (mV)\n", active);
-
- //    		uint16_t off = get_probe_config<uint16_t>(device, ch, SR_CONF_PROBE_OFFSET).value();
- //    		LogDebug(".Offset: %d\n", off);
-
- //    		uint16_t hwoff = get_probe_config<uint16_t>(device, ch, SR_CONF_PROBE_HW_OFFSET).value();
- //    		LogDebug(".HWOffset: %d\n", hwoff);
-
- //    		uint64_t factor = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_FACTOR).value();
- //    		LogDebug(".Factor: %lu\n", factor);
- //    	}
- //    }
-
 	int bitdepth = get_dev_config<uint8_t>(device, SR_CONF_UNIT_BITS).value();
 	LogDebug("Bit depth: %d\n", bitdepth);
 
