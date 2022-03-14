@@ -11,6 +11,7 @@
 #include <thread>
 #include <cassert>
 #include <semaphore>
+#include <utility>
 
 #include <stdlib.h>
 
@@ -18,6 +19,7 @@ using std::string;
 using std::vector;
 using std::to_string;
 using std::thread;
+using std::pair;
 
 Socket g_scpiSocket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 Socket g_dataSocket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
@@ -115,7 +117,8 @@ void ParseScpiLine(const string& line, string& subject, string& cmd, bool& query
 vector<struct sr_channel*> g_channels;
 int g_numdivs;
 
-bool g_runAcq;
+bool g_runAcq = false;
+bool g_acqRunning = false;
 bool g_triggerOneShot = false;
 
 void run_server(struct sr_dev_inst *device, int scpi_port) {
@@ -234,14 +237,24 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 				if (subj_ch) {
 					if ((cmd == "ON" || cmd == "OFF") && args.size() == 0) {
 						bool state = cmd == "ON";
-						if (!state && subj_ch == g_channels[0]) {
-							LogWarning("Ignoring request to disable ch0\n");
+						if (!state && subj_ch == g_channels[0] && !get_probe_config<bool>(device, g_channels[1], SR_CONF_PROBE_EN)) {
+							LogWarning("Ignoring request to disable ch0 because it would disable all channels\n");
 						} else {
-							set_probe_config<bool>(device, subj_ch, SR_CONF_PROBE_EN, state);
-							LogDebug("Updated enabled for ch%s, now %s\n", subject.c_str(), cmd.c_str());
+							// Must stop acquisition while disabling probe or we crash inside vendor code
+							bool wasRunning = g_acqRunning;
+							if (wasRunning) {
+								g_runAcq = false;
+								sr_session_stop();
 
-							if (g_runAcq) {
-								sr_session_stop(); // Restart acquisition
+								// Block until stopped
+								while (g_acqRunning) usleep(100);
+							}
+
+							set_probe_config<bool>(device, subj_ch, SR_CONF_PROBE_EN, state);
+							LogDebug("Updated ENABLED for ch%s, now %s\n", subject.c_str(), cmd.c_str());
+							
+							// If we were running, restart
+							if (wasRunning) {
 								g_runAcq = true;
 							}
 						}
@@ -320,7 +333,7 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 						g_runAcq = true;
 					} else if (cmd == "STOP" && args.size() == 0) {
 						LogDebug("Stopping...\n");
-						g_runAcq = 0;
+						g_runAcq = false;
 						sr_session_stop();
 					} else {
 						LogWarning("Unknown command: %s\n", line.c_str());
@@ -374,46 +387,78 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		// Don't send further data packets after stop requested
 
 		struct sr_datafeed_dso* dso = (struct sr_datafeed_dso*)packet->payload;
+
+		vector<int> sample_channels;
+		int i = 0;
+		for (GSList *l = dso->probes; l != NULL; l = l->next) {
+			if (((struct sr_channel*)l->data)->enabled)
+        		sample_channels.push_back(i);
+        	i++;
+        }
+
+        uint16_t numchans = sample_channels.size();
+
 		size_t num_samples = dso->num_samples;
 
-		LogDebug("Yield samples: %lu\n", num_samples);
+		LogDebug("Yield samples: %lu on %d channels\n", num_samples, numchans);
 
 		uint8_t* buf = (uint8_t*) dso->data;
 
-		uint16_t numchans = 1;
+		uint8_t* deinterleaving_buffer = NULL;
+		if (numchans != 1) {
+			deinterleaving_buffer = new uint8_t[numchans * num_samples];
+			uint8_t* p = buf;
+			for (size_t sample = 0; sample < num_samples; sample++) {
+				for (int ch = 0; ch < numchans; ch++) {
+					deinterleaving_buffer[(ch * num_samples) + sample] = *p;
+					p++;
+				}
+			}
+		}
+
 		client->SendLooped((uint8_t*)&numchans, sizeof(numchans));
 
-		uint64_t samplerate_hz = get_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE).value();
+		uint64_t samplerate_hz = get_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE).value() / numchans;
 
 		int64_t samplerate_fs = 1000000000000000 / samplerate_hz;
 		client->SendLooped((uint8_t*)&samplerate_fs, sizeof(samplerate_fs));
 
-		//Send channel ID, scale, offset, and memory depth
-		size_t chnum = 0;
-		client->SendLooped((uint8_t*)&chnum, sizeof(chnum));
-		client->SendLooped((uint8_t*)&num_samples, sizeof(num_samples));
+		int chindex = 0;
+		for (size_t chnum : sample_channels) {
+			//Send channel ID, scale, offset, and memory depth
+			client->SendLooped((uint8_t*)&chnum, sizeof(chnum));
+			client->SendLooped((uint8_t*)&num_samples, sizeof(num_samples));
 
-		struct sr_channel* ch = g_channels[chnum];
+			struct sr_channel* ch = g_channels[chnum];
 
-		uint8_t numbits = get_dev_config<uint8_t>(device, SR_CONF_UNIT_BITS).value();
+			uint8_t numbits = get_dev_config<uint8_t>(device, SR_CONF_UNIT_BITS).value();
 
-		assert(numbits == 8);
+			assert(numbits == 8);
 
-		float vdiv_mV = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_VDIV).value();
-		float hwmin = get_dev_config<uint32_t>(device, SR_CONF_REF_MIN).value_or(0);
-		float hwmax = get_dev_config<uint32_t>(device, SR_CONF_REF_MAX).value_or((1 << numbits) - 1);
-		float full_throw_V = vdiv_mV / 1000 * g_numdivs;  // Volts indicated by most-positive value (255)
-		float hwrange_factor = (255.f / (hwmax - hwmin)); // Adjust for incomplete range of ADC reports
-		float scale = hwrange_factor / 255.f * full_throw_V;
-		float offset = 127 * scale; // Zero is 127
+			float vdiv_mV = get_probe_config<uint64_t>(device, ch, SR_CONF_PROBE_VDIV).value();
+			float hwmin = get_dev_config<uint32_t>(device, SR_CONF_REF_MIN).value_or(0);
+			float hwmax = get_dev_config<uint32_t>(device, SR_CONF_REF_MAX).value_or((1 << numbits) - 1);
+			float full_throw_V = vdiv_mV / 1000 * g_numdivs;  // Volts indicated by most-positive value (255)
+			float hwrange_factor = (255.f / (hwmax - hwmin)); // Adjust for incomplete range of ADC reports
+			float scale = hwrange_factor / 255.f * full_throw_V;
+			float offset = 127 * scale; // Zero is 127
 
-		float trigphase = 0;
+			float trigphase = 0;
 
-		float config[3] = {scale, offset, trigphase};
-		client->SendLooped((uint8_t*)&config, sizeof(config));
+			float config[3] = {scale, offset, trigphase};
+			client->SendLooped((uint8_t*)&config, sizeof(config));
 
-		//Send the actual waveform data
-		client->SendLooped((uint8_t*)buf, num_samples * sizeof(int8_t));
+			if (deinterleaving_buffer)
+				buf = &deinterleaving_buffer[chindex * num_samples];
+
+			//Send the actual waveform data
+			client->SendLooped((uint8_t*)buf, num_samples * sizeof(int8_t));
+
+			chindex++;
+		}
+
+		if (deinterleaving_buffer)
+			delete[] deinterleaving_buffer;
 
 		if (g_triggerOneShot) {
 			LogDebug("Stopping after oneshot\n");
@@ -447,11 +492,15 @@ void WaveformServerThread()
 			LogError("session_start returned failure: %d\n", err);
 			return;
 		}
+
+		g_acqRunning = true;
+
 		if ((err = sr_session_run()) != SR_OK) {
 			LogError("session_run returned failure: %d\n", err);
 			return;
 		}
 
 		LogDebug("Session Stopped.\n");
+		g_acqRunning = false;
 	}
 }
