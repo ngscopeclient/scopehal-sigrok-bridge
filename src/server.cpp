@@ -461,21 +461,14 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 						// Maybe just leave running and send single frames when SINGLE requested?
 
 						g_runAcq = false;
-						sr_session_stop();
+						if (g_acqRunning) sr_session_stop();
 						while (g_acqRunning) usleep(100);
 
 						g_runAcq = true;
-
-						while (!g_acqRunning) usleep(100);
-
-						ScpiSend(client, "OK");
 					} else if (cmd == "STOP" && args.size() == 0) {
 						LogDebug("Stopping...\n");
 						g_runAcq = false;
 						sr_session_stop();
-						while (g_acqRunning) usleep(100);
-
-						ScpiSend(client, "OK");
 					} else {
 						LogWarning("Unknown command: %s\n", line.c_str());
 					}
