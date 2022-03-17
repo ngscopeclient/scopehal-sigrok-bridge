@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.3)
-project(scopehal-sigrock-bridge)
+project(scopehal-sigrok-bridge)
 
 set(WARNINGS "-Wall -Wextra -Wuninitialized ")
 set(WARNINGS "${WARNINGS} -Wshadow -Wunsafe-loop-optimizations -Wpedantic -Wcast-align -Wwrite-strings")
@@ -25,20 +25,20 @@ include_directories(${PKGDEPS_INCLUDE_DIRS})
 add_subdirectory("${PROJECT_SOURCE_DIR}/lib/log")
 add_subdirectory("${PROJECT_SOURCE_DIR}/lib/xptools")
 
-add_executable(scopehal-sigrock-bridge
+add_executable(scopehal-sigrok-bridge
 	src/main.cpp
 	src/srbinding.cpp
 	src/server.cpp
 )
 
 link_directories(${PKGDEPS_LIBRARY_DIRS})
-target_link_libraries(scopehal-sigrock-bridge
+target_link_libraries(scopehal-sigrok-bridge
 	${PKGDEPS_LIBRARIES}
 	xptools
 	log
 )
 
-target_include_directories(scopehal-sigrock-bridge PRIVATE
+target_include_directories(scopehal-sigrok-bridge PRIVATE
 	lib/
 )
 
