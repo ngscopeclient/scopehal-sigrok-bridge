@@ -91,10 +91,6 @@ int main(int argc, char* argv[])
 	int bitdepth = get_dev_config<uint8_t>(device, SR_CONF_UNIT_BITS).value();
 	LogDebug("Bit depth: %d\n", bitdepth);
 
-	// int refmin = get_dev_config<uint32_t>(device, SR_CONF_REF_MIN).value_or(-1);
-	// int refmax = get_dev_config<uint32_t>(device, SR_CONF_REF_MAX).value_or(-1);
-	// LogDebug("Ref min/max: %d/%d\n", refmin, refmax);
-
 	run_server(device, 4000);
 
 	(void) session;

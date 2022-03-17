@@ -30,7 +30,6 @@ bool ScpiSend(Socket& sock, const string& cmd)
 {
 	string tempbuf = cmd + "\n";
 
-	// LogDebug("Send: %s", tempbuf.c_str());
 	return sock.SendLooped((unsigned char*)tempbuf.c_str(), tempbuf.length());
 }
 
@@ -129,7 +128,7 @@ void compute_scale_and_offset(struct sr_channel* ch, float& scale, float& offset
 	float hwmax = get_dev_config<uint32_t>(g_device, SR_CONF_REF_MAX).value_or((1 << 8) - 1);
 	float full_throw_V = vdiv_mV / 1000 * g_numdivs;  // Volts indicated by most-positive value (255)
 	float hwrange_factor = (255.f / (hwmax - hwmin)); // Adjust for incomplete range of ADC reports
-	scale = -1 * hwrange_factor / 255.f * full_throw_V;
+	scale = -1 * hwrange_factor / 255.f * full_throw_V; // ADC values are 'upside down'
 	offset = 127 * scale; // Zero is 127
 }
 
@@ -170,8 +169,6 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 	set_dev_config<uint64_t>(device, SR_CONF_LIMIT_SAMPLES, 10000000);
 	set_dev_config<uint8_t>(device, SR_CONF_TRIGGER_SOURCE, DSO_TRIGGER_CH0);
 	g_selectedTriggerChannel = 0;
-
-	// uint64_t curr_bufsz = get_dev_config<uint64_t>(device, SR_CONF_LIMIT_SAMPLES).value();
 
 	// 10000000 per probe when both active, 2*10000000 when one active
 	// Driver does not report discrete steps; make some up
@@ -234,13 +231,6 @@ void run_server(struct sr_dev_inst *device, int scpi_port) {
 			bool query;
 			vector<string> args;
 			ParseScpiLine(line, subject, cmd, query, args);
-
-			// LogDebug("Receive: %s\n", line.c_str());
-			// LogDebug("Parsed: s='%s', c='%s', q=%d, a=[", subject.c_str(), cmd.c_str(), query);
-			// for (auto i : args) {
-			// 	LogDebug("'%s',", i.c_str());
-			// }
-			// LogDebug("]\n");
 
 			bool subj_dev = false;
 			bool subj_trig = false;
@@ -482,20 +472,6 @@ uint32_t g_lastTrigPos = 0;
 
 float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint32_t trigpos)
 {
-	// if(g_triggerSampleIndex <= 0)
-	// 	return 0;
-
-	// float trigscale = g_roundedRange[g_triggerChannel] / 32512;
-	// float trigoff = g_offsetDuringArm[g_triggerChannel];
-
-	// float fa = buf[g_triggerSampleIndex-1] * trigscale + trigoff;
-	// float fb = buf[g_triggerSampleIndex] * trigscale + trigoff;
-
-	// //no need to divide by time, sample spacing is normalized to 1 timebase unit
-	// float slope = (fb - fa);
-	// float delta = g_triggerVoltage - fa;
-	// return delta / slope;
-
 	if (trigpos <= 0) {
 		return 0;
 	}
@@ -511,6 +487,7 @@ float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint32_t trigp
 	float final = - ( 1 - phase ); // ADC values are 'upside down'
 
 	if (phase < 0 || phase > 1) {
+		// Need to find the actual trigger position and shift by more than one sample when this happens
 		LogWarning("Something has gone wrong in trigphase (phase=%f)\n", phase);
 		LogDebug("TP=%d, TV=%d, A=%d, B=%d, slope=%f, delta=%f, final=%f\n", trigpos, trigvalue, pretrig, afttrig, slope, delta, final);
 
@@ -576,10 +553,6 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			}
         	i++;
         }
-
-		// for (GSList *l = dso->probes; l != NULL; l = l->next) {
-  //       	sample_channels.push_back(((struct sr_channel*)l->data)->index);
-  //       }
 
         uint16_t numchans = sample_channels.size();
 
