@@ -15,10 +15,10 @@ uint64_t get_ms() {
 	return millisec_since_epoch;
 }
 
-float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint64_t trigpos)
+float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint64_t trigpos, bool try_fix = true)
 {
 	if (trigpos <= 0) {
-		return 0;
+		return 999;
 	}
 
 	// These are all already in ADC values, so no need to scale
@@ -31,18 +31,34 @@ float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint64_t trigp
 	float phase = (delta / slope);
 	float final = - ( 1 - phase ); // ADC values are 'upside down'
 
-	if (phase < 0 || phase > 1) {
+	if (final <= -1 || final > 0) {
+		// This means that the signal did not actually cross the trigger at the reported position.
 		// Need to find the actual trigger position and shift by more than one sample when this happens
-		LogWarning("Something has gone wrong in trigphase (phase=%f)\n", phase);
-		LogDebug("TP=%lu, TV=%d, A=%d, B=%d, slope=%f, delta=%f, final=%f\n", trigpos, trigvalue, pretrig, afttrig, slope, delta, final);
 
-		for (int i = -50; i < 50; i++) {
-			printf("buf[trigpos%+d] = %03d, ", i, buf[trigpos-i]);
+		if (try_fix) {
+			// Scan forwards and backwards in the sample stream by up to this number of samples before
+			// giving up:
+			const int try_up_to = 10;
+			int i = 1;
+			while ( i < try_up_to ) {
+				float res = InterpolateTriggerTime(ch, buf, trigpos + i, false);
+
+				if (res > -1 && res <= 0) {
+					// Success! The threshold was passed during the window offset by i samples; so
+					// shift the trigphase of the waveform by that many clocks (trigphase is in
+					// units of samples on this side of the bridge).
+					return res + i;
+				}
+
+				if (i > 0) i = -i;
+				else i = -i + 1;
+			}
+
+			LogWarning("Something has gone wrong in trigphase and couldn't be fixed (phase=%f)\n", phase);
+
 		}
 
-		printf("\n");
-
-		return 0;
+		return 999;
 	}
 
 	return final;
@@ -133,6 +149,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		}
 
 		float trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], buffer_for_trigphase, trigpos_in_samples);
+		if (trigphase == 999) trigphase = 0;
 		// trigphase needs to come from the channel that the trigger is on for all channels.
 		// TODO: does this mean we need to offset the other channel by samplerate_fs/2 though if the
 		// ADC sample is 180deg out of phase?
