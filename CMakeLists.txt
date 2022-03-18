@@ -23,18 +23,21 @@ pkg_check_modules(PKGDEPS REQUIRED ${PKGDEPS})
 include_directories(${PKGDEPS_INCLUDE_DIRS})
 
 add_subdirectory("${PROJECT_SOURCE_DIR}/lib/log")
+add_subdirectory("${PROJECT_SOURCE_DIR}/lib/scpi-server-tools")
 add_subdirectory("${PROJECT_SOURCE_DIR}/lib/xptools")
 
 add_executable(scopehal-sigrok-bridge
 	src/main.cpp
 	src/srbinding.cpp
-	src/server.cpp
+	src/SigrokSCPIServer.cpp
+	src/WaveformServerThread.cpp
 )
 
 link_directories(${PKGDEPS_LIBRARY_DIRS})
 target_link_libraries(scopehal-sigrok-bridge
 	${PKGDEPS_LIBRARIES}
 	xptools
+	scpi-server-tools
 	log
 )
 
