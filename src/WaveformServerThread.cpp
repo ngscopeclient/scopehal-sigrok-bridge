@@ -6,8 +6,6 @@
 #include "log/log.h"
 #include "srbinding.h"
 
-uint32_t g_lastTrigPos = 0;
-
 uint64_t g_session_start_ms;
 uint32_t g_seqnum = 0;
 double g_lastReportedRate;
@@ -17,7 +15,7 @@ uint64_t get_ms() {
 	return millisec_since_epoch;
 }
 
-float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint32_t trigpos)
+float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint64_t trigpos)
 {
 	if (trigpos <= 0) {
 		return 0;
@@ -36,7 +34,7 @@ float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint32_t trigp
 	if (phase < 0 || phase > 1) {
 		// Need to find the actual trigger position and shift by more than one sample when this happens
 		LogWarning("Something has gone wrong in trigphase (phase=%f)\n", phase);
-		LogDebug("TP=%d, TV=%d, A=%d, B=%d, slope=%f, delta=%f, final=%f\n", trigpos, trigvalue, pretrig, afttrig, slope, delta, final);
+		LogDebug("TP=%lu, TV=%d, A=%d, B=%d, slope=%f, delta=%f, final=%f\n", trigpos, trigvalue, pretrig, afttrig, slope, delta, final);
 
 		for (int i = -50; i < 50; i++) {
 			printf("buf[trigpos%+d] = %03d, ", i, buf[trigpos-i]);
@@ -64,14 +62,15 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 	} else if (packet->type == SR_DF_TRIGGER) {
 		struct ds_trigger_pos* trigger = (struct ds_trigger_pos*)packet->payload;
+		(void) trigger;
 
-		if (trigger->status & 0x01) {
-            uint32_t trig_pos = trigger->real_pos;
+		// if (trigger->status & 0x01) {
+  //           uint32_t trig_pos = trigger->real_pos;
 
-            g_lastTrigPos = trig_pos * 2 / count_enabled_channels();
+  //           g_lastTrigPos = trig_pos * 2 / count_enabled_channels();
 
-            LogWarning("Trigger packet; real_pos=%d, g_lastTrigPos=%d\n", trig_pos, g_lastTrigPos);
-		}
+  //           LogWarning("Trigger packet; real_pos=%d, g_lastTrigPos=%d\n", trig_pos, g_lastTrigPos);
+		// }
 
 	} else if (packet->type == SR_DF_DSO) {
 		uint32_t seqnum = g_seqnum++;
@@ -88,6 +87,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		}
 
 		g_pendingAcquisition = false;
+		g_capturedFirstFrame = true;
 
 		struct sr_datafeed_dso* dso = (struct sr_datafeed_dso*)packet->payload;
 
@@ -123,7 +123,16 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			buffer_for_trigphase = &deinterleaving_buffer[g_selectedTriggerChannel * num_samples];
 		}
 
-		float trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], buffer_for_trigphase, g_lastTrigPos);
+		uint64_t samplerate_hz = get_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE).value();
+
+		uint64_t trigpos_in_samples = num_samples * g_trigpct / 100;
+
+		if (samplerate_hz == 1000000000 && numchans == 2) {
+			// Seems to incorrectly report a 1Gs/s rate on both channels when it is actually 1Gs/s TOTAL
+			samplerate_hz /= 2;
+		}
+
+		float trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], buffer_for_trigphase, trigpos_in_samples);
 		// trigphase needs to come from the channel that the trigger is on for all channels.
 		// TODO: does this mean we need to offset the other channel by samplerate_fs/2 though if the
 		// ADC sample is 180deg out of phase?
@@ -131,14 +140,6 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		client->SendLooped((uint8_t*)&seqnum, sizeof(seqnum));
 
 		client->SendLooped((uint8_t*)&numchans, sizeof(numchans));
-
-		// TODO: This is maybe wrong? (the / numchans)
-		uint64_t samplerate_hz = get_dev_config<uint64_t>(device, SR_CONF_SAMPLERATE).value();
-
-		if (samplerate_hz == 1000000000 && numchans == 2) {
-			// Seems to incorrectly report a 1Gs/s rate on both channels when it is actually 1Gs/s TOTAL
-			samplerate_hz /= 2;
-		}
 
 		int64_t samplerate_fs = 1000000000000000 / samplerate_hz;
 		client->SendLooped((uint8_t*)&samplerate_fs, sizeof(samplerate_fs));
@@ -228,6 +229,7 @@ void WaveformServerThread()
 		LogDebug("Starting Session...\n");
 
 		g_running = true;
+		g_capturedFirstFrame = false;
 		g_seqnum = 0;
 		g_session_start_ms = get_ms();
 		g_lastReportedRate = 0;

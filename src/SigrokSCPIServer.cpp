@@ -113,7 +113,7 @@ void SigrokSCPIServer::OnCommand(
 		g_oneShot = cmd != "START";
 		g_run = true;
 
-		force_correct_sample_config();
+		force_correct_config();
 	} else if (cmd == "STOP") {
 		LogDebug("cmd: STOP\n");
 
@@ -129,8 +129,12 @@ void SigrokSCPIServer::OnCommand(
 
 			set_probe_config<bool>(g_sr_device, g_channels[GetChannelID(subject)], SR_CONF_PROBE_EN, state);
 			LogDebug("Updated ENABLED for ch%s, now %s\n", subject.c_str(), cmd.c_str());
+
+			force_correct_config();
 			
 			if (wasRunning) restart_capture();
+
+			force_correct_config();
 		}
 	} else if (cmd == "COUP") {
 		string coup_str = args[0];
@@ -165,36 +169,22 @@ void SigrokSCPIServer::OnCommand(
 		set_rate(stoull(args[0]));
 
 		LogDebug("Updated RATE; now %lu\n", g_rate);
+
+		force_correct_config();
 	} else if (cmd == "DEPTH") {
 		set_depth(stoull(args[0]));
 
 		LogDebug("Updated DEPTH; now %lu\n", g_depth);
+
+		force_correct_config();
 	} else if (subject == "TRIG") {
 		if (cmd == "DELAY" && args.size() == 1) {
 			LogDebug("DELAY request: %s\n", line.c_str());
 			uint64_t delay = stoull(args[0]);
 
-			int numchans = count_enabled_channels();
+			set_trigfs(delay);
 
-			uint64_t samples_in_full_capture = get_dev_config<uint64_t>(g_sr_device, SR_CONF_LIMIT_SAMPLES).value();
-			uint64_t samplerate_hz = get_dev_config<uint64_t>(g_sr_device, SR_CONF_SAMPLERATE).value();
-
-			if (samplerate_hz == 1000000000 && numchans == 2) {
-				// Seems to incorrectly report a 1Gs/s rate on both channels when it is actually 1Gs/s TOTAL
-				samplerate_hz /= 2;
-			}
-
-			uint64_t fs_per_sample = 1000000000000000 / samplerate_hz;
-			uint64_t fs_in_full_capture = samples_in_full_capture * fs_per_sample;
-			double pct = ((double)delay / (double)fs_in_full_capture) * (double)100;
-			uint8_t result = pct;
-
-			// LogWarning("samples=%lu, hz=%lu, fsper=%lu, fsinfull=%lu, pct=%f\n", 
-				// samples_in_full_capture, samplerate_hz, fs_per_sample, fs_in_full_capture, pct);
-
-			set_dev_config<uint8_t>(g_sr_device, SR_CONF_HORIZ_TRIGGERPOS, result);
-
-			LogDebug("Set trigger DELAY to %lu (%%%d)\n", delay, result);
+			LogDebug("Set trigger DELAY to %lu (%%%d)\n", delay, g_trigpct);
 		} else if (cmd == "SOU" && args.size() == 1) {
 			int channel = args[0][0] - '0';
 
