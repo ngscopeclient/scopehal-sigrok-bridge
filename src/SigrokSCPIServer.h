@@ -14,8 +14,6 @@ public:
 	SigrokSCPIServer(ZSOCKET sock);
 	virtual ~SigrokSCPIServer();
 
-	static void Start(bool force = false);
-
 protected:
 	virtual std::string GetMake();
 	virtual std::string GetModel();
@@ -25,7 +23,7 @@ protected:
 	virtual std::vector<size_t> GetSampleRates();
 	virtual std::vector<size_t> GetSampleDepths();
 
-	virtual bool OnCommand(
+	virtual void OnCommand(
 		const std::string& line,
 		const std::string& subject,
 		const std::string& cmd,
@@ -34,12 +32,9 @@ protected:
 	virtual bool OnQuery(
 		const std::string& line,
 		const std::string& subject,
-		const std::string& cmd,
-		const std::vector<std::string>& args);
+		const std::string& cmd);
 
 	virtual size_t GetChannelID(const std::string& subject);
-
-	void Stop();
 };
 
 #endif

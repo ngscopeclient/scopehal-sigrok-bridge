@@ -29,6 +29,7 @@ add_subdirectory("${PROJECT_SOURCE_DIR}/lib/xptools")
 add_executable(scopehal-sigrok-bridge
 	src/main.cpp
 	src/srbinding.cpp
+	src/server.cpp
 	src/SigrokSCPIServer.cpp
 	src/WaveformServerThread.cpp
 )
