@@ -31,7 +31,8 @@ int count_enabled_channels() {
 	int enabled = 0;
 
 	for (auto ch : g_channels) {
-		if (get_probe_config<bool>(g_sr_device, ch, SR_CONF_PROBE_EN)) {
+		if (get_probe_config<bool>(g_sr_device, ch, SR_CONF_PROBE_EN) && ch->enabled) {
+			// SR_CONF_PROBE_EN seems to not report correct result
 			enabled++;
 		}
 	}
