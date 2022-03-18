@@ -192,12 +192,7 @@ void SigrokSCPIServer::OnCommand(
 			// LogWarning("samples=%lu, hz=%lu, fsper=%lu, fsinfull=%lu, pct=%f\n", 
 				// samples_in_full_capture, samplerate_hz, fs_per_sample, fs_in_full_capture, pct);
 
-			bool wasRunning = stop_capture_sync();
-
 			set_dev_config<uint8_t>(g_sr_device, SR_CONF_HORIZ_TRIGGERPOS, result);
-
-			// If we were running, restart
-			if (wasRunning) restart_capture();
 
 			LogDebug("Set trigger DELAY to %lu (%%%d)\n", delay, result);
 		} else if (cmd == "SOU" && args.size() == 1) {

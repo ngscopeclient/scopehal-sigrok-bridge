@@ -126,6 +126,8 @@ int init_and_find_device() {
 }
 
 bool stop_capture_sync() {
+	if (!g_run && !g_running) return false;
+
 	bool wasRunning = g_run;
 
 	g_run = false;
