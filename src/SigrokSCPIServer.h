@@ -34,12 +34,12 @@ protected:
 		const std::string& subject,
 		const std::string& cmd);
 
-	virtual size_t GetChannelID(const std::string& subject);
+	virtual bool GetChannelID(const std::string& subject, size_t& id_out, bool& digital_out);
 
 
-	virtual void AcquisitonStart(bool oneShot = false);
-	virtual void AcquisitonForceTrigger();
-	virtual void AcquisitonStop();
+	virtual void AcquisitionStart(bool oneShot = false);
+	virtual void AcquisitionForceTrigger();
+	virtual void AcquisitionStop();
 	virtual void SetProbeEnabled(size_t chIndex, bool enabled);
 	virtual void SetProbeCoupling(size_t chIndex, const std::string& coupling);
 	virtual void SetProbeRange(size_t chIndex, double range_V);
@@ -48,8 +48,8 @@ protected:
 	virtual void SetSampleDepth(uint64_t depth);
 	virtual void SetTriggerDelay(uint64_t delay_fs);
 	virtual void SetTriggerSource(size_t chIndex);
+	virtual void SetTriggerLevel(double level_V);
 	virtual void SetTriggerTypeEdge();
-	virtual void SetEdgeTriggerLevel(double level_V);
 	virtual void SetEdgeTriggerEdge(const std::string& edge);
 };
 

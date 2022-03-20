@@ -22,9 +22,16 @@ SigrokSCPIServer::~SigrokSCPIServer()
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Command parsing
 
-size_t SigrokSCPIServer::GetChannelID(const string& subject)
+bool SigrokSCPIServer::GetChannelID(const std::string& subject, size_t& id_out, bool& digital_out)
 {
-	return subject[0] - '0';
+	int result = subject[0] - '0';
+	if (result < 0 || result > 1) {
+		return false;
+	}
+
+	id_out = result;
+	digital_out = false;
+	return true;
 }
 
 bool SigrokSCPIServer::OnQuery(
@@ -118,7 +125,7 @@ bool SigrokSCPIServer::OnCommand(
 /**
 	@brief Arm the device for capture. If oneShot, capture only one waveform
  */
-void SigrokSCPIServer::AcquisitonStart(bool oneShot)
+void SigrokSCPIServer::AcquisitionStart(bool oneShot)
 {
 	LogDebug("cmd: START\n");
 
@@ -131,15 +138,15 @@ void SigrokSCPIServer::AcquisitonStart(bool oneShot)
 /**
 	@brief Force the device to capture a waveform
  */
-void SigrokSCPIServer::AcquisitonForceTrigger()
+void SigrokSCPIServer::AcquisitionForceTrigger()
 {
-	AcquisitonStart(true);
+	AcquisitionStart(true);
 }
 
 /**
 	@brief Stop the device from capturing further waveforms
  */
-void SigrokSCPIServer::AcquisitonStop()
+void SigrokSCPIServer::AcquisitionStop()
 {
 	LogDebug("cmd: STOP\n");
 
@@ -278,7 +285,7 @@ void SigrokSCPIServer::SetTriggerTypeEdge()
 /**
 	@brief Set the edge trigger's level to `level` in Volts
  */
-void SigrokSCPIServer::SetEdgeTriggerLevel(double level_V)
+void SigrokSCPIServer::SetTriggerLevel(double level_V)
 {
 	// Set it on all probes, allowing SR_CONF_TRIGGER_SOURCE to select
 	// which is actually active
