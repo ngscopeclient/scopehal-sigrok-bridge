@@ -99,135 +99,223 @@ vector<size_t> SigrokSCPIServer::GetSampleDepths()
 	return result;
 }
 
-void SigrokSCPIServer::OnCommand(
+bool SigrokSCPIServer::OnCommand(
 		const string& line,
 		const string& subject,
 		const string& cmd,
 		const std::vector<std::string>& args)
 {
-	(void) line;
-	
-	if (cmd == "START" || cmd == "SINGLE" || cmd == "FORCE") {
-		LogDebug("cmd: START\n");
+	if(BridgeSCPIServer::OnCommand(line, subject, cmd, args))
+		return true;
 
-		g_oneShot = cmd != "START";
-		g_run = true;
+	//TODO: handle commands not implemented by the base class
+	LogWarning("Unrecognized command received: %s\n", line.c_str());
 
-		force_correct_config();
-	} else if (cmd == "STOP") {
-		LogDebug("cmd: STOP\n");
+	return false;
+}
 
-		g_run = false;
-		sr_session_stop();
-	} else if (cmd == "ON" || cmd == "OFF") {
-		bool state = cmd == "ON";
-		if (!state && GetChannelID(subject) == 0 && !get_probe_config<bool>(g_sr_device, g_channels[1], SR_CONF_PROBE_EN)) {
-			LogWarning("Ignoring request to disable ch0 because it would disable all channels\n");
-		} else {
-			// Must stop acquisition while disabling probe or we crash inside vendor code
-			bool wasRunning = stop_capture_sync();
+//-- Acquisition Commands --//
+/**
+	@brief Arm the device for capture. If oneShot, capture only one waveform
+ */
+void SigrokSCPIServer::AcquisitonStart(bool oneShot)
+{
+	LogDebug("cmd: START\n");
 
-			set_probe_config<bool>(g_sr_device, g_channels[GetChannelID(subject)], SR_CONF_PROBE_EN, state);
-			LogDebug("Updated ENABLED for ch%s, now %s\n", subject.c_str(), cmd.c_str());
+	g_oneShot = oneShot;
+	g_run = true;
 
-			force_correct_config();
-			
-			if (wasRunning) restart_capture();
+	force_correct_config();
+}
 
-			force_correct_config();
-		}
-	} else if (cmd == "COUP") {
-		string coup_str = args[0];
-		uint8_t sr_coupling = -1;
+/**
+	@brief Force the device to capture a waveform
+ */
+void SigrokSCPIServer::AcquisitonForceTrigger()
+{
+	AcquisitonStart(true);
+}
 
-		if (coup_str == "AC1M") {
-			sr_coupling = SR_AC_COUPLING;
-		} else if (coup_str == "DC1M") {
-			sr_coupling = SR_DC_COUPLING;
-		} else {
-			LogWarning("Unknown coupling: %s\n", coup_str.c_str());
-			return;
-		}
+/**
+	@brief Stop the device from capturing further waveforms
+ */
+void SigrokSCPIServer::AcquisitonStop()
+{
+	LogDebug("cmd: STOP\n");
 
-		set_probe_config<uint8_t>(g_sr_device, g_channels[GetChannelID(subject)], SR_CONF_PROBE_COUPLING, sr_coupling);
-		LogDebug("Updated coupling for ch%s, now %s\n", subject.c_str(), coup_str.c_str());
-	} else if (cmd == "RANGE") {
-		float range_V = stod(args[0]);
-		float range_mV_per_div = (range_V / g_numdivs) * 1000;
+	g_run = false;
+	sr_session_stop();
+}
 
-		uint64_t selected = vdiv_options[vdiv_options.size()];
 
-		for (auto i : vdiv_options) {
-			if ((i > selected) && !(i > range_mV_per_div)) {
-				selected = i;
-			}
-		}
+//-- Probe Configuration --//
+/**
+	@brief Enable or disable the probe on channel `chIndex`, enable if `enabled==true`
+ */
+void SigrokSCPIServer::SetProbeEnabled(size_t chIndex, bool enabled)
+{
+	if (!enabled && chIndex == 0 && !get_probe_config<bool>(g_sr_device, g_channels[1], SR_CONF_PROBE_EN)) {
+		LogWarning("Ignoring request to disable ch0 because it would disable all channels\n");
+	} else {
+		// Must stop acquisition while disabling probe or we crash inside vendor code
+		bool wasRunning = stop_capture_sync();
 
-		set_probe_config<uint64_t>(g_sr_device, g_channels[GetChannelID(subject)], SR_CONF_PROBE_VDIV, selected);
-		LogDebug("Updated RANGE; Wanted %f, result: %lu\n", range_mV_per_div, selected);
-	} else if (cmd == "RATE") {
-		set_rate(stoull(args[0]));
-
-		LogDebug("Updated RATE; now %lu\n", g_rate);
+		set_probe_config<bool>(g_sr_device, g_channels[chIndex], SR_CONF_PROBE_EN, enabled);
+		LogDebug("Updated ENABLED for ch%ld, now %d\n", chIndex, enabled);
 
 		force_correct_config();
-	} else if (cmd == "DEPTH") {
-		set_depth(stoull(args[0]));
-
-		LogDebug("Updated DEPTH; now %lu\n", g_depth);
+		
+		if (wasRunning) restart_capture();
 
 		force_correct_config();
-	} else if (subject == "TRIG") {
-		if (cmd == "DELAY" && args.size() == 1) {
-			LogDebug("DELAY request: %s\n", line.c_str());
-			uint64_t delay = stoull(args[0]);
+	}
+}
 
-			set_trigfs(delay);
+/**
+	@brief Set the coupling of the probe on channel `chIndex` to `coupling`
+ */
+void SigrokSCPIServer::SetProbeCoupling(size_t chIndex, const std::string& coupling)
+{
+	uint8_t sr_coupling = -1;
 
-			LogDebug("Set trigger DELAY to %lu (%%%d)\n", delay, g_trigpct);
-		} else if (cmd == "SOU" && args.size() == 1) {
-			int channel = args[0][0] - '0';
+	if (coupling == "AC1M") {
+		sr_coupling = SR_AC_COUPLING;
+	} else if (coupling == "DC1M") {
+		sr_coupling = SR_DC_COUPLING;
+	} else {
+		LogWarning("Unknown coupling: %s\n", coupling.c_str());
+		return;
+	}
 
-			set_trigger_channel(channel);
+	set_probe_config<uint8_t>(g_sr_device, g_channels[chIndex], SR_CONF_PROBE_COUPLING, sr_coupling);
+	LogDebug("Updated coupling for ch%ld, now %s\n", chIndex, coupling.c_str());
+}
 
-			LogDebug("Set trigger SOU to %d\n", channel);
-		} else if (cmd == "LEV" && args.size() == 1) {
-			double level = stod(args[0]);
+/**
+	@brief Set the requested voltage range of the probe on channel `chIndex`
+	       to `range` (Volts max-to-min)
+ */
+void SigrokSCPIServer::SetProbeRange(size_t chIndex, double range_V)
+{
+	float range_mV_per_div = (range_V / g_numdivs) * 1000;
 
-			// Set it on all probes, allowing SR_CONF_TRIGGER_SOURCE to select
-			// which is actually active
-			for (auto ch : g_channels) {
-				float scale, offset;
-				compute_scale_and_offset(ch, scale, offset);
+	uint64_t selected = vdiv_options[vdiv_options.size()];
 
-				// voltage = ADC * scale - offset
-				// ADC = (voltage + offset) / scale
-
-				uint8_t adc = (level + offset) / scale;
-
-				LogDebug("Setting LEV on ch%d; adc=%d\n", ch->index, adc);
-
-				set_probe_config<uint8_t>(g_sr_device, ch, SR_CONF_TRIGGER_VALUE, adc);
-			}
-
-			LogDebug("Set trigger LEV to %f\n", level);
-		} else if (cmd == "EDGE:DIR" && args.size() == 1) {
-			string edge = args[0];
-			int sr_edge = -1;
-
-			if (edge == "RISING") {
-				sr_edge = DSO_TRIGGER_RISING;
-			} else if (edge == "FALLING") {
-				sr_edge = DSO_TRIGGER_FALLING;
-			} else {
-				LogWarning("Unsupported trigger EDGE: %s\n", edge.c_str());
-				return;
-			}
-
-			set_dev_config<uint8_t>(g_sr_device, SR_CONF_TRIGGER_SLOPE, sr_edge);
-
-			LogDebug("Set trigger EDGE to %s\n", edge.c_str());
+	for (auto i : vdiv_options) {
+		if ((i > selected) && !(i > range_mV_per_div)) {
+			selected = i;
 		}
 	}
+
+	set_probe_config<uint64_t>(g_sr_device, g_channels[chIndex], SR_CONF_PROBE_VDIV, selected);
+	LogDebug("Updated RANGE; Wanted %f (%f PtP), result: %lu\n", range_mV_per_div, range_V, selected);
+}
+
+/**
+	@brief Set the requested voltage offset of the probe on channel `chIndex`
+	       to `offset` (Volts)
+ */
+void SigrokSCPIServer::SetProbeOffset(size_t chIndex, double offset_V)
+{
+	;
+}
+
+//-- Sampling Configuration --//
+/**
+	@brief Set sample rate in Hz
+ */
+void SigrokSCPIServer::SetSampleRate(uint64_t rate_hz)
+{
+	set_rate(rate_hz);
+
+	LogDebug("Updated RATE; now %lu\n", g_rate);
+
+	force_correct_config();
+}
+
+/**
+	@brief Set sample rate in samples
+ */
+void SigrokSCPIServer::SetSampleDepth(uint64_t depth)
+{
+	set_depth(depth);
+
+	LogDebug("Updated DEPTH; now %lu\n", g_depth);
+
+	force_correct_config();
+}
+
+//-- Trigger Configuration --//
+/**
+	@brief Set trigger delay in femptoseconds
+ */
+void SigrokSCPIServer::SetTriggerDelay(uint64_t delay_fs)
+{
+	set_trigfs(delay_fs);
+
+	LogDebug("Set trigger DELAY to %lu (%%%d)\n", delay_fs, g_trigpct);
+}
+
+/**
+	@brief Set trigger source to the probe on channel `chIndex`
+ */
+void SigrokSCPIServer::SetTriggerSource(size_t chIndex)
+{
+	set_trigger_channel(chIndex);
+
+	LogDebug("Set trigger SOU to %lu\n", chIndex);
+}
+
+//-- (Edge) Trigger Configuration --//
+/**
+	@brief Configure the device to use an edge trigger
+ */
+void SigrokSCPIServer::SetTriggerTypeEdge()
+{
+	;
+}
+
+/**
+	@brief Set the edge trigger's level to `level` in Volts
+ */
+void SigrokSCPIServer::SetEdgeTriggerLevel(double level_V)
+{
+	// Set it on all probes, allowing SR_CONF_TRIGGER_SOURCE to select
+	// which is actually active
+	for (auto ch : g_channels) {
+		float scale, offset;
+		compute_scale_and_offset(ch, scale, offset);
+
+		// voltage = ADC * scale - offset
+		// ADC = (voltage + offset) / scale
+
+		uint8_t adc = (level_V + offset) / scale;
+
+		set_probe_config<uint8_t>(g_sr_device, ch, SR_CONF_TRIGGER_VALUE, adc);
+	}
+
+	LogDebug("Set trigger LEV to %f\n", level_V);
+}
+
+/**
+	@brief Set the edge trigger's activation to the edge `edge`
+	       ("RISING", "FALLING", ...)
+ */
+void SigrokSCPIServer::SetEdgeTriggerEdge(const std::string& edge)
+{
+	int sr_edge = -1;
+
+	if (edge == "RISING") {
+		sr_edge = DSO_TRIGGER_RISING;
+	} else if (edge == "FALLING") {
+		sr_edge = DSO_TRIGGER_FALLING;
+	} else {
+		LogWarning("Unsupported trigger EDGE: %s\n", edge.c_str());
+		return;
+	}
+
+	set_dev_config<uint8_t>(g_sr_device, SR_CONF_TRIGGER_SLOPE, sr_edge);
+
+	LogDebug("Set trigger EDGE to %s\n", edge.c_str());
 }
 
