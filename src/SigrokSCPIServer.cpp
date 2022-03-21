@@ -22,7 +22,7 @@ SigrokSCPIServer::~SigrokSCPIServer()
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Command parsing
 
-bool SigrokSCPIServer::GetChannelID(const std::string& subject, size_t& id_out, bool& digital_out)
+bool SigrokSCPIServer::GetChannelID(const std::string& subject, size_t& id_out)
 {
 	int result;
 
@@ -37,8 +37,15 @@ bool SigrokSCPIServer::GetChannelID(const std::string& subject, size_t& id_out, 
 	}
 
 	id_out = result;
-	digital_out = !g_deviceIsScope;
 	return true;
+}
+
+BridgeSCPIServer::ChannelType SigrokSCPIServer::GetChannelType(size_t channel)
+{
+	if (g_deviceIsScope)
+		return CH_ANALOG;
+	else
+		return CH_DIGITAL;
 }
 
 bool SigrokSCPIServer::OnQuery(
@@ -164,9 +171,9 @@ void SigrokSCPIServer::AcquisitionStop()
 
 //-- Probe Configuration --//
 /**
-	@brief Enable or disable the probe on channel `chIndex`, enable if `enabled==true`
+	@brief Enable or disable channel `chIndex`, enable if `enabled==true`
  */
-void SigrokSCPIServer::SetProbeEnabled(size_t chIndex, bool enabled)
+void SigrokSCPIServer::SetChannelEnabled(size_t chIndex, bool enabled)
 {
 	if (!g_deviceIsScope) return;
 
@@ -190,7 +197,7 @@ void SigrokSCPIServer::SetProbeEnabled(size_t chIndex, bool enabled)
 /**
 	@brief Set the coupling of the probe on channel `chIndex` to `coupling`
  */
-void SigrokSCPIServer::SetProbeCoupling(size_t chIndex, const std::string& coupling)
+void SigrokSCPIServer::SetAnalogCoupling(size_t chIndex, const std::string& coupling)
 {
 	if (!g_deviceIsScope) return;
 
@@ -213,7 +220,7 @@ void SigrokSCPIServer::SetProbeCoupling(size_t chIndex, const std::string& coupl
 	@brief Set the requested voltage range of the probe on channel `chIndex`
 	       to `range` (Volts max-to-min)
  */
-void SigrokSCPIServer::SetProbeRange(size_t chIndex, double range_V)
+void SigrokSCPIServer::SetAnalogRange(size_t chIndex, double range_V)
 {
 	if (!g_deviceIsScope) return;
 
@@ -232,9 +239,9 @@ void SigrokSCPIServer::SetProbeRange(size_t chIndex, double range_V)
 }
 
 /**
-	@brief Set the threshold for a digital HIGH on the probe on channel `chIndex`
+	@brief Set the threshold for a digital HIGH on the channel `chIndex`
  */
-void SigrokSCPIServer::SetProbeDigitalThreshold(size_t chIndex, double threshold_V)
+void SigrokSCPIServer::SetDigitalThreshold(size_t chIndex, double threshold_V)
 {
 	if (g_deviceIsScope) return;
 	
@@ -247,9 +254,9 @@ void SigrokSCPIServer::SetProbeDigitalThreshold(size_t chIndex, double threshold
 }
 
 /**
-	@brief Set the hysteresis value for the digital probe on channel `chIndex`
+	@brief Set the hysteresis value for the channel `chIndex`
  */
-void SigrokSCPIServer::SetProbeDigitalHysteresis(size_t chIndex, double hysteresis)
+void SigrokSCPIServer::SetDigitalHysteresis(size_t chIndex, double hysteresis)
 {
 	;
 }
@@ -258,7 +265,7 @@ void SigrokSCPIServer::SetProbeDigitalHysteresis(size_t chIndex, double hysteres
 	@brief Set the requested voltage offset of the probe on channel `chIndex`
 	       to `offset` (Volts)
  */
-void SigrokSCPIServer::SetProbeOffset(size_t chIndex, double offset_V)
+void SigrokSCPIServer::SetAnalogOffset(size_t chIndex, double offset_V)
 {
 	;
 }

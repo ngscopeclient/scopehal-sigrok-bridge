@@ -63,7 +63,7 @@ int init_and_find_device() {
 
 	struct sr_dev_driver* sel_driver;
 
-	const char* wanted_driver = "DSCope";
+	const char* wanted_driver = "DSLogic";
 	// virtual-demo, DSLogic, DSCope
 
 	sr_dev_driver **const drivers = sr_driver_list();
