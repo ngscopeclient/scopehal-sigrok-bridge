@@ -11,7 +11,8 @@
  X(uint32_t, UINT32, uint32) \
  X(uint16_t, UINT16, uint16) \
  X(uint8_t, BYTE, byte) \
- X(bool, BOOLEAN, boolean)
+ X(bool, BOOLEAN, boolean) \
+ X(double, DOUBLE, double)
 
 template <typename T>
 bool extract_gvar(GVariant* gvar, T& result);

@@ -24,13 +24,20 @@ SigrokSCPIServer::~SigrokSCPIServer()
 
 bool SigrokSCPIServer::GetChannelID(const std::string& subject, size_t& id_out, bool& digital_out)
 {
-	int result = subject[0] - '0';
-	if (result < 0 || result > 1) {
+	int result;
+
+	if (subject.size() == 1) {
+		result = subject[0] - '0';
+	} else {
+		result = 10 + (subject[1] - '0');
+	}
+
+	if (result < 0 || result > (int)GetAnalogChannelCount()) {
 		return false;
 	}
 
 	id_out = result;
-	digital_out = false;
+	digital_out = !g_deviceIsScope;
 	return true;
 }
 
@@ -161,6 +168,8 @@ void SigrokSCPIServer::AcquisitionStop()
  */
 void SigrokSCPIServer::SetProbeEnabled(size_t chIndex, bool enabled)
 {
+	if (!g_deviceIsScope) return;
+
 	if (!enabled && chIndex == 0 && !get_probe_config<bool>(g_sr_device, g_channels[1], SR_CONF_PROBE_EN)) {
 		LogWarning("Ignoring request to disable ch0 because it would disable all channels\n");
 	} else {
@@ -183,6 +192,8 @@ void SigrokSCPIServer::SetProbeEnabled(size_t chIndex, bool enabled)
  */
 void SigrokSCPIServer::SetProbeCoupling(size_t chIndex, const std::string& coupling)
 {
+	if (!g_deviceIsScope) return;
+
 	uint8_t sr_coupling = -1;
 
 	if (coupling == "AC1M") {
@@ -204,6 +215,8 @@ void SigrokSCPIServer::SetProbeCoupling(size_t chIndex, const std::string& coupl
  */
 void SigrokSCPIServer::SetProbeRange(size_t chIndex, double range_V)
 {
+	if (!g_deviceIsScope) return;
+
 	float range_mV_per_div = (range_V / g_numdivs) * 1000;
 
 	uint64_t selected = vdiv_options[vdiv_options.size()];
@@ -216,6 +229,29 @@ void SigrokSCPIServer::SetProbeRange(size_t chIndex, double range_V)
 
 	set_probe_config<uint64_t>(g_sr_device, g_channels[chIndex], SR_CONF_PROBE_VDIV, selected);
 	LogDebug("Updated RANGE; Wanted %f (%f PtP), result: %lu\n", range_mV_per_div, range_V, selected);
+}
+
+/**
+	@brief Set the threshold for a digital HIGH on the probe on channel `chIndex`
+ */
+void SigrokSCPIServer::SetProbeDigitalThreshold(size_t chIndex, double threshold_V)
+{
+	if (g_deviceIsScope) return;
+	
+	if (threshold_V < 0) threshold_V = 0;
+	if (threshold_V > 5) threshold_V = 5;
+
+	set_dev_config<double>(g_sr_device, SR_CONF_VTH, threshold_V);
+
+	LogDebug("Updated THRESH, now %f\n", threshold_V);
+}
+
+/**
+	@brief Set the hysteresis value for the digital probe on channel `chIndex`
+ */
+void SigrokSCPIServer::SetProbeDigitalHysteresis(size_t chIndex, double hysteresis)
+{
+	;
 }
 
 /**
@@ -287,6 +323,8 @@ void SigrokSCPIServer::SetTriggerTypeEdge()
  */
 void SigrokSCPIServer::SetTriggerLevel(double level_V)
 {
+	if (!g_deviceIsScope) return;
+
 	// Set it on all probes, allowing SR_CONF_TRIGGER_SOURCE to select
 	// which is actually active
 	for (auto ch : g_channels) {

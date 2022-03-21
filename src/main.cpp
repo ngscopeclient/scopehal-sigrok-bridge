@@ -42,10 +42,12 @@ int main(int argc, char* argv[])
 	int waveform_port = scpi_port+1;
 
 	//Configure the data plane socket
+	g_dataSocket.SetReuseaddr();
 	g_dataSocket.Bind(waveform_port);
 	g_dataSocket.Listen();
 
 	//Launch the control plane socket server
+	g_scpiSocket.SetReuseaddr();
 	g_scpiSocket.Bind(scpi_port);
 	g_scpiSocket.Listen();
 

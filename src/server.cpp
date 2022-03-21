@@ -17,6 +17,8 @@ bool g_running;
 bool g_oneShot;
 bool g_capturedFirstFrame;
 
+bool g_deviceIsScope;
+
 uint64_t g_rate, g_depth, g_trigfs = 0;
 uint8_t g_trigpct = 0;
 
@@ -61,7 +63,7 @@ int init_and_find_device() {
 
 	struct sr_dev_driver* sel_driver;
 
-	const char* wanted_driver = "DSCope";
+	const char* wanted_driver = "DSLogic";
 	// virtual-demo, DSLogic, DSCope
 
 	sr_dev_driver **const drivers = sr_driver_list();
@@ -108,10 +110,19 @@ int init_and_find_device() {
 
 	ds_trigger_init();
 
+	// Relevant on DSLogic. Let's work in non-stream mode for now.
+	// This is also required for non 0% delay
+	set_dev_config<bool>(g_sr_device, SR_CONF_STREAM, false);
+
 	uint8_t numbits = get_dev_config<uint8_t>(g_sr_device, SR_CONF_UNIT_BITS).value();
-	if (numbits != 8) {
-		LogError("Device does not produce 8-bit samples; unsupported\n");
-		return 1;
+	LogDebug("Sample bits: %d\n", numbits);
+
+	if (numbits == 1) {
+		g_deviceIsScope = false;
+	} else if (numbits == 8) {
+		g_deviceIsScope = true;
+	} else {
+		LogError("Unsupported bit depth/device type\n");
 	}
 
 	for (GSList *l = g_sr_device->channels; l; l = l->next) {
@@ -119,7 +130,10 @@ int init_and_find_device() {
         g_channels.push_back(ch);
     }
 
-	vdiv_options = get_dev_config_options<uint64_t>(g_sr_device, SR_CONF_PROBE_VDIV);
+    LogDebug("Device has %ld channels\n", g_channels.size());
+
+    if (g_deviceIsScope)
+		vdiv_options = get_dev_config_options<uint64_t>(g_sr_device, SR_CONF_PROBE_VDIV);
 
     set_trigger_channel(0);
     set_rate(10000000);
@@ -150,8 +164,9 @@ void force_correct_config() {
 	// and occasionally otherwise it seems to reset itself to 1MS/s 1Mpts configuration
 	// and this fixes it.
 
-	if (g_run) {
+	if (g_deviceIsScope && g_run) {
 		while (!g_running) usleep(100);
+
 		while (!g_capturedFirstFrame) usleep(100);
 	}
 
@@ -159,8 +174,10 @@ void force_correct_config() {
 	set_depth(g_depth);
 	set_trigfs(g_trigfs);
 
-	bool wasRunning = stop_capture_sync();
-	if (wasRunning) restart_capture();
+	if (g_deviceIsScope) {
+		bool wasRunning = stop_capture_sync();
+		if (wasRunning) restart_capture();
+	}
 }
 
 void set_rate(uint64_t rate) {

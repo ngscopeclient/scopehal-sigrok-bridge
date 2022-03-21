@@ -27,6 +27,7 @@ extern bool g_run;
 extern bool g_running;
 extern bool g_oneShot;
 extern bool g_capturedFirstFrame;
+extern bool g_deviceIsScope;
 
 extern int g_selectedTriggerChannel;
 extern int g_numdivs;

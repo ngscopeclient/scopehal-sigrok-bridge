@@ -44,6 +44,8 @@ protected:
 	virtual void SetProbeCoupling(size_t chIndex, const std::string& coupling);
 	virtual void SetProbeRange(size_t chIndex, double range_V);
 	virtual void SetProbeOffset(size_t chIndex, double offset_V);
+	virtual void SetProbeDigitalThreshold(size_t chIndex, double threshold_V);
+	virtual void SetProbeDigitalHysteresis(size_t chIndex, double hysteresis);
 	virtual void SetSampleRate(uint64_t rate_hz);
 	virtual void SetSampleDepth(uint64_t depth);
 	virtual void SetTriggerDelay(uint64_t delay_fs);
