@@ -63,7 +63,7 @@ int init_and_find_device() {
 
 	struct sr_dev_driver* sel_driver;
 
-	const char* wanted_driver = "DSLogic";
+	const char* wanted_driver = "DSCope";
 	// virtual-demo, DSLogic, DSCope
 
 	sr_dev_driver **const drivers = sr_driver_list();
@@ -167,7 +167,11 @@ void force_correct_config() {
 	if (g_deviceIsScope && g_run) {
 		while (!g_running) usleep(100);
 
-		while (!g_capturedFirstFrame) usleep(100);
+		int cycles = 0;
+		while (!g_capturedFirstFrame) {
+			if (cycles++ > 1000) break; // Avoid hanging if not triggered
+			usleep(100);
+		}
 	}
 
 	set_rate(g_rate);
