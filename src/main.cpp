@@ -20,7 +20,16 @@ Socket g_dataSocket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 
 int main(int argc, char* argv[])
 {
-	(void) argc; (void) argv;
+	char* drivername;
+
+	if (argc != 2) {
+		printf("Usage: %s <driver name>\n", argv[0]);
+		return 1;
+	}
+
+	drivername = argv[1];
+	int req_bus = -1;
+	int req_dev = -1;
 
 	Severity console_verbosity = Severity::DEBUG;
 	g_log_sinks.emplace(g_log_sinks.begin(), new ColoredSTDLogSink(console_verbosity));
@@ -35,8 +44,9 @@ int main(int argc, char* argv[])
 	   //    3   Informational
 	   //    4   Debug
 	   //    5   Spew
+	// virtual-demo, DSLogic, DSCope
 
-	if (init_and_find_device() != 0) return 1;
+	if (init_and_find_device(drivername, req_bus, req_dev) != 0) return 1;
 
 	int scpi_port = 5025;
 	int waveform_port = scpi_port+1;

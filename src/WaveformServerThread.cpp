@@ -290,9 +290,6 @@ void WaveformServerThread()
 
 		g_running = true;
 		g_capturedFirstFrame = false;
-		g_seqnum = 0;
-		g_session_start_ms = get_ms();
-		g_lastReportedRate = 0;
 
 		int err;
 		if ((err = sr_session_start()) != SR_OK) {

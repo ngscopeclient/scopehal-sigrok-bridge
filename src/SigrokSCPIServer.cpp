@@ -96,13 +96,6 @@ vector<size_t> SigrokSCPIServer::GetSampleRates()
 
 vector<size_t> SigrokSCPIServer::GetSampleDepths()
 {
-	vector<size_t> depths {
-		10,
-		100,
-		1000,
-		10000,
-		100000,
-	};
 
 	vector<size_t> muls {
 		10,
@@ -111,10 +104,31 @@ vector<size_t> SigrokSCPIServer::GetSampleDepths()
 	};
 
 	vector<size_t> result;
-	for (auto d : depths) {
+	size_t d = 10;
+	while (d) {
 		for (auto m : muls) {
-			result.push_back(d*m);
+			auto opt = d*m;
+
+			if (!g_deviceIsScope && opt <= 1000) {
+				// DSLogic won't actually take captures under 2.5kS
+				// There doesn't seem to be any way to get the sample depth
+				// options programmatically...
+				continue;
+			}
+
+			if (opt > g_hw_depth || opt > 5000000) {
+				// Reported hardware depth limit is astonishing.
+				// I can't configure it above 5MS on my laptop without getting
+				// a LIBUSB_ERROR_NO_MEM inside libsigrok4DSL, so arbitrary
+				// limit there for now.
+				d = 0;
+				break;
+			}
+
+			result.push_back(opt);
 		}
+
+		d *= 10;
 	}
 
 	return result;
@@ -144,9 +158,16 @@ void SigrokSCPIServer::AcquisitionStart(bool oneShot)
 	LogDebug("cmd: START\n");
 
 	g_oneShot = oneShot;
+
+	g_seqnum = 0;
+	g_session_start_ms = get_ms();
+	g_lastReportedRate = 0;
+
 	g_run = true;
 
 	force_correct_config();
+
+
 }
 
 /**

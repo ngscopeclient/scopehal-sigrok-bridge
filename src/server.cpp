@@ -3,6 +3,7 @@
 #include <libsigrok4DSL/libsigrok.h>
 #include "log/log.h"
 #include "srbinding.h"
+#include <math.h>
 
 struct sr_context* g_sr_context = NULL;
 struct sr_dev_inst* g_sr_device = NULL;
@@ -20,6 +21,7 @@ bool g_capturedFirstFrame;
 bool g_deviceIsScope;
 
 uint64_t g_rate, g_depth, g_trigfs = 0;
+uint64_t g_hw_depth;
 uint8_t g_trigpct = 0;
 
 int g_selectedTriggerChannel;
@@ -98,22 +100,22 @@ void compute_scale_and_offset(struct sr_channel* ch, float& scale, float& offset
 	offset = 127 * scale; // Zero is 127
 }
 
+// Not exposed from the DSL driver code, so copied here...
 enum LANGUAGE {
     LANGUAGE_CN = 25,
     LANGUAGE_EN = 31,
 };
 
-int init_and_find_device() {
+int init_and_find_device(const char* wanted_driver, int req_usb_bus, int req_usb_dev) {
 	int err;
 	if ((err = sr_init(&g_sr_context)) != SR_OK) {
 		LogError("Failed to initialize libsigrok4DSL: %d\n", err);
 		return err;
 	}
 
-	struct sr_dev_driver* sel_driver;
+	g_sr_device = NULL;
 
-	const char* wanted_driver = "DSLogic";
-	// virtual-demo, DSLogic, DSCope
+	struct sr_dev_driver* sel_driver = NULL;
 
 	sr_dev_driver **const drivers = sr_driver_list();
 	for (sr_dev_driver **driver = drivers; *driver; driver++) {
@@ -121,6 +123,11 @@ int init_and_find_device() {
 			sel_driver = *driver;
 			break;
 		}
+	}
+
+	if (!sel_driver) {
+		LogError("Didn't find driver.\n");
+		return 1;
 	}
 
 	if (sr_driver_init(g_sr_context, sel_driver) != SR_OK) {
@@ -132,8 +139,26 @@ int init_and_find_device() {
 
 	GSList *const devices = sr_driver_scan(sel_driver, NULL);
 
+	int dev_usb_bus, dev_usb_dev;
+
 	for (GSList *l = devices; l; l = l->next) {
-        g_sr_device = (sr_dev_inst*)l->data;
+		sr_dev_inst* dev = (sr_dev_inst*)l->data;
+        // SORRY! SORRY! SORRY! This struct is only available in libsigrok-internal.h
+		// TODO: NOT portable to regular sigrok
+		uint8_t* p = (uint8_t*)dev->conn;
+		dev_usb_bus = *p++;
+		dev_usb_dev = *p++;
+
+		bool ok = true;
+
+		if (req_usb_bus != -1) {
+			ok = req_usb_bus == dev_usb_bus && req_usb_dev == dev_usb_dev;
+		}
+
+		if (ok) {
+        	g_sr_device = dev;
+        	break;
+        }
     }
 
     if (!g_sr_device) {
@@ -144,6 +169,7 @@ int init_and_find_device() {
 	g_slist_free(devices);
 
 	LogNotice("Found device: %s - %s\n", g_sr_device->vendor, g_sr_device->model);
+	LogDebug(" -> USB bus %d : dev %d\n", dev_usb_bus, dev_usb_dev);
 
 	if ((err = sr_dev_open(g_sr_device)) != SR_OK) {
 		LogError("Failed to sr_dev_open device: %d\n", err);
@@ -159,11 +185,29 @@ int init_and_find_device() {
 
 	ds_trigger_init();
 
-	LogDebug("Initial language: %d; ", get_dev_config<int16_t>(g_sr_device, SR_CONF_LANGUAGE).value());
+	uint8_t numbits = get_dev_config<uint8_t>(g_sr_device, SR_CONF_UNIT_BITS).value();
+	LogDebug("Sample bits: %d", numbits);
 
+	if (numbits == 1) {
+		LogDebug(" (logic analyzer)\n");
+		g_deviceIsScope = false;
+	} else if (numbits == 8) {
+		LogDebug(" (scope)\n");
+		g_deviceIsScope = true;
+	} else {
+		LogError("\n -> Unsupported bit depth/device type\n");
+		return 1;
+	}
+
+	for (GSList *l = g_sr_device->channels; l; l = l->next) {
+        struct sr_channel* ch = (struct sr_channel*)l->data;
+        g_channels.push_back(ch);
+    }
+
+    LogDebug("Device has %ld channels\n", g_channels.size());
+
+    // Must configure device language to make SR_CONF_OPERATION_MODE values meaningful...
 	set_dev_config<int16_t>(g_sr_device, SR_CONF_LANGUAGE, LANGUAGE_EN);
-
-	LogDebug("Configured language: %d\n", get_dev_config<int16_t>(g_sr_device, SR_CONF_LANGUAGE).value());
 
 	for (std::string opt : get_dev_config_options<std::string>(g_sr_device, SR_CONF_OPERATION_MODE))
 	{
@@ -174,40 +218,21 @@ int init_and_find_device() {
 		get_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE).value().c_str(),
 		get_dev_config<bool>(g_sr_device, SR_CONF_STREAM).value());
 
-	// This is required for non 0% delay
-	// TODO: What if anything does this do on DSCope? (Nothing, I think)
-	// TODO: Try "Internal Test"
-	set_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE, "Buffer Mode");
-
-	LogDebug("Configured op mode: %s; stream = %d\n",
-		get_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE).value().c_str(),
-		get_dev_config<bool>(g_sr_device, SR_CONF_STREAM).value());
-
-	ds_trigger_set_mode(SIMPLE_TRIGGER);
-	ds_trigger_set_en(true);
-	// ds_trigger_probe_set(0, 'R', 'X'); // ch0 'R'ising edge ('X' = ignore, what the arg does idk.) All active (non-'X') triggers ANDed together
-	// ds_trigger_set_pos(50); // %
-
-	uint8_t numbits = get_dev_config<uint8_t>(g_sr_device, SR_CONF_UNIT_BITS).value();
-	LogDebug("Sample bits: %d\n", numbits);
-
-	if (numbits == 1) {
-		g_deviceIsScope = false;
-	} else if (numbits == 8) {
-		g_deviceIsScope = true;
+	if (g_deviceIsScope) {
+		vdiv_options = get_dev_config_options<uint64_t>(g_sr_device, SR_CONF_PROBE_VDIV);
 	} else {
-		LogError("Unsupported bit depth/device type\n");
+		set_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE, "Buffer Mode");
+
+		LogDebug("Configured op mode: %s; stream = %d\n",
+			get_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE).value().c_str(),
+			get_dev_config<bool>(g_sr_device, SR_CONF_STREAM).value());
+
+		ds_trigger_set_mode(SIMPLE_TRIGGER);
+		ds_trigger_set_en(true);
 	}
 
-	for (GSList *l = g_sr_device->channels; l; l = l->next) {
-        struct sr_channel* ch = (struct sr_channel*)l->data;
-        g_channels.push_back(ch);
-    }
-
-    LogDebug("Device has %ld channels\n", g_channels.size());
-
-    if (g_deviceIsScope)
-		vdiv_options = get_dev_config_options<uint64_t>(g_sr_device, SR_CONF_PROBE_VDIV);
+	g_hw_depth = get_dev_config<uint64_t>(g_sr_device, SR_CONF_HW_DEPTH).value();
+	LogDebug("Hardware depth limit: %lu (1<<%d)\n", g_hw_depth, (int)log2(g_hw_depth));
 
     set_trigger_channel(0);
     set_rate(10000000);

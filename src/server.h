@@ -20,6 +20,7 @@ extern struct sr_session* g_sr_session;
 extern vector<struct sr_channel*> g_channels;
 extern vector<uint64_t> vdiv_options;
 extern uint64_t g_rate, g_depth, g_trigfs;
+extern uint64_t g_hw_depth;
 extern uint8_t g_trigpct;
 
 extern bool g_quit;
@@ -28,6 +29,14 @@ extern bool g_running;
 extern bool g_oneShot;
 extern bool g_capturedFirstFrame;
 extern bool g_deviceIsScope;
+
+
+extern uint64_t g_session_start_ms;
+extern uint32_t g_seqnum;
+extern double g_lastReportedRate;
+extern uint32_t g_lastTrigPos;
+
+uint64_t get_ms();
 
 extern int g_selectedTriggerChannel;
 extern int g_selectedTriggerDirection;
@@ -39,7 +48,7 @@ enum trigger_direction {
 	ANY
 };
 
-int init_and_find_device();
+int init_and_find_device(const char*, int, int);
 void compute_scale_and_offset(struct sr_channel* ch, float& scale, float& offset);
 int count_enabled_channels();
 void set_trigger_channel(int ch);
