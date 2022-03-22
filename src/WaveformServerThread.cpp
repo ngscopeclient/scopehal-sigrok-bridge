@@ -9,6 +9,7 @@
 uint64_t g_session_start_ms;
 uint32_t g_seqnum = 0;
 double g_lastReportedRate;
+uint32_t g_lastTrigPos;
 
 uint64_t get_ms() {
 	auto millisec_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -65,7 +66,6 @@ float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint64_t trigp
 }
 
 bool g_pendingAcquisition = false;
-uint32_t g_lastTrigPos;
 
 void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafeed_packet *packet, void* client_vp) {
 	Socket* client = (Socket*) client_vp;
@@ -109,6 +109,8 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		for (GSList *l = device->channels; l != NULL; l = l->next) {
 			// Should be able to do dso->probes but that appears to just always contain all channels,
 			//  so do this instead.
+			// Note that on the DSLogic in non-stream mode (which we use because we want pretrigger buffer)
+			//  the probes will all stay enabled according to this.
 			if (((struct sr_channel*)l->data)->enabled) {
         		sample_channels.push_back(chindex);
 			}
@@ -158,10 +160,10 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			}
 
         	uint32_t nominal_trigpos_in_bits = num_samples * 8 * g_trigpct / 100;
-        	// Where in the bitstream SHOULD the trigger be (in bytes, so x8 for samples)
+        	// Where in the bitstream SHOULD the trigger be
 
         	uint32_t trigpos_in_bits = g_lastTrigPos * 8 * 2 / count_enabled_channels();
-        	// Where in the bitstream DID the trigger happen (in bytes, so x8 for samples)
+        	// Where in the bitstream DID the trigger happen
 
 			first_sample = nominal_trigpos_in_bits - trigpos_in_bits;
 
