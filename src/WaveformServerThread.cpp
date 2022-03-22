@@ -171,7 +171,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			// (trigpos_in_frac_bytes * 8) - (nominal_trigpos_in_bytes * 8) IT'S STILL OFF BY A
 			// SAMPLE OR TWO sometimes!! So instead we do the following:
 
-			uint8_t that_byte = deinterleaved_buffers[0][trigpos_in_bytes];
+			uint8_t that_byte = deinterleaved_buffers[g_selectedTriggerChannel][trigpos_in_bytes];
 			// Get the byte that the transition occurred during
 
 			if (that_byte == 0 || that_byte == 255) {

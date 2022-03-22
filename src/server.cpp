@@ -71,6 +71,8 @@ void update_trigger_internals() {
 
 		ds_trigger_probe_set(ch, dir, 'X');
 	}
+
+	force_correct_config();
 }
 
 int count_enabled_channels() {
@@ -222,7 +224,11 @@ bool stop_capture_sync() {
 	g_run = false;
 	sr_session_stop();
 
-	while (g_running) usleep(100);
+	int cycles = 0;
+	while (g_running) {
+		if (cycles++ > 1000) break; // Avoid hanging if not triggering
+		usleep(100);
+	}
 
 	return wasRunning;
 }
@@ -250,10 +256,8 @@ void force_correct_config() {
 	set_depth(g_depth);
 	set_trigfs(g_trigfs);
 
-	if (g_deviceIsScope) {
-		bool wasRunning = stop_capture_sync();
-		if (wasRunning) restart_capture();
-	}
+	bool wasRunning = stop_capture_sync();
+	if (wasRunning) restart_capture();
 }
 
 void set_rate(uint64_t rate) {
@@ -272,19 +276,25 @@ void set_trigfs(uint64_t fs) {
 	// LogDebug("set_trigfs %lu\n", fs);
 	g_trigfs = fs;
 
-	int numchans = count_enabled_channels();
+	double pct;
+	if (fs != 0) {
+		int numchans = count_enabled_channels();
 
-	uint64_t samples_in_full_capture = get_dev_config<uint64_t>(g_sr_device, SR_CONF_LIMIT_SAMPLES).value();
-	uint64_t samplerate_hz = get_dev_config<uint64_t>(g_sr_device, SR_CONF_SAMPLERATE).value();
+		uint64_t samples_in_full_capture = get_dev_config<uint64_t>(g_sr_device, SR_CONF_LIMIT_SAMPLES).value();
+		uint64_t samplerate_hz = get_dev_config<uint64_t>(g_sr_device, SR_CONF_SAMPLERATE).value();
 
-	if (samplerate_hz == 1000000000 && numchans == 2) {
-		// Seems to incorrectly report a 1Gs/s rate on both channels when it is actually 1Gs/s TOTAL
-		samplerate_hz /= 2;
+		if (samplerate_hz == 1000000000 && numchans == 2) {
+			// Seems to incorrectly report a 1Gs/s rate on both channels when it is actually 1Gs/s TOTAL
+			samplerate_hz /= 2;
+		}
+
+		uint64_t fs_per_sample = 1000000000000000 / samplerate_hz;
+		uint64_t fs_in_full_capture = samples_in_full_capture * fs_per_sample;
+		pct = ((double)fs / (double)fs_in_full_capture) * (double)100;
+	} else {
+		pct = 0;
 	}
 
-	uint64_t fs_per_sample = 1000000000000000 / samplerate_hz;
-	uint64_t fs_in_full_capture = samples_in_full_capture * fs_per_sample;
-	double pct = ((double)fs / (double)fs_in_full_capture) * (double)100;
 	g_trigpct = pct;
 
 	// LogWarning("samples=%lu, hz=%lu, fsper=%lu, fsinfull=%lu, pct=%f\n", 
