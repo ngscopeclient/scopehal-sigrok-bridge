@@ -157,59 +157,13 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 				}
 			}
 
-        	uint32_t nominal_trigpos_in_bytes = num_samples * g_trigpct / 100;
+        	uint32_t nominal_trigpos_in_bits = num_samples * 8 * g_trigpct / 100;
         	// Where in the bitstream SHOULD the trigger be (in bytes, so x8 for samples)
 
-        	uint32_t trigpos_in_bytes = g_lastTrigPos * 2 / count_enabled_channels();
+        	uint32_t trigpos_in_bits = g_lastTrigPos * 8 * 2 / count_enabled_channels();
         	// Where in the bitstream DID the trigger happen (in bytes, so x8 for samples)
 
-			first_sample = (trigpos_in_bytes - nominal_trigpos_in_bytes) * 8;
-			// Byte-level offset for our data
-			// Now, you might think to yourself, louis, did you forget that trigpos_in_bytes could
-			// end up fractional, and maybe rounding it to an integer is why we're off by a few bits?
-			// But no. That's not it... if we allow it to be a double and then compute the offset as
-			// (trigpos_in_frac_bytes * 8) - (nominal_trigpos_in_bytes * 8) IT'S STILL OFF BY A
-			// SAMPLE OR TWO sometimes!! So instead we do the following:
-
-			uint8_t that_byte = deinterleaved_buffers[g_selectedTriggerChannel][trigpos_in_bytes];
-			// Get the byte that the transition occurred during
-
-			if (that_byte == 0 || that_byte == 255) {
-				;
-				// Transition must have occurred between last bit of last octet
-				// and now, no bit adjustment.
-			} else {
-				bool sought;
-
-				if (g_selectedTriggerDirection == RISING) {
-					sought = 1;
-					// Looking for first high bit
-				} else if (g_selectedTriggerDirection == FALLING) {
-					sought = 0;
-					// Looking for first low bit
-				} else {
-					// ANY transition. We know since it's not 0 or 255 that there MUST be a
-					// transition somewhere IN this octet (i.e. not between last and this)
-					// so look at the first bit and see what transition we need to find.
-					if (that_byte & 1) {
-						sought = 0;
-						// First bit high, looking for transition to low
-					} else {
-						sought = 1;
-						// First bit low, looking for transition to high
-					}
-				}
-
-				// Seek through byte to find actual transition point
-				for (int i = 0; i < 8; i++) {
-					bool bit = (that_byte & (1 << i));
-					if (bit == sought) break;
-
-					first_sample++;
-				}
-			}
-
-			first_sample *= -1;
+			first_sample = nominal_trigpos_in_bits - trigpos_in_bits;
 
 		} else { // DSO
 			struct sr_datafeed_dso* dso = (struct sr_datafeed_dso*)packet->payload;
