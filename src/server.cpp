@@ -23,12 +23,54 @@ uint64_t g_rate, g_depth, g_trigfs = 0;
 uint8_t g_trigpct = 0;
 
 int g_selectedTriggerChannel;
+int g_selectedTriggerDirection;
 int g_numdivs = DS_CONF_DSO_VDIVS;
 // TODO: SR_CONF_NUM_VDIV instead of DS_CONF_DSO_VDIVS on regular sigrok
+
+void update_trigger_internals();
 
 void set_trigger_channel(int ch) {
 	set_dev_config<uint8_t>(g_sr_device, SR_CONF_TRIGGER_SOURCE, ch==0?DSO_TRIGGER_CH0:DSO_TRIGGER_CH1);
 	g_selectedTriggerChannel = ch;
+
+	if (!g_deviceIsScope)
+		update_trigger_internals();
+}
+
+void set_trigger_direction(int dir) {
+	if (g_deviceIsScope) {
+		int sr_edge = -1;
+
+		if (dir == RISING) {
+			sr_edge = DSO_TRIGGER_RISING;
+		} else if (dir == FALLING) {
+			sr_edge = DSO_TRIGGER_FALLING;
+		} else {
+			return;
+		}
+
+		set_dev_config<uint8_t>(g_sr_device, SR_CONF_TRIGGER_SLOPE, sr_edge);
+	} else {
+		g_selectedTriggerDirection = dir;
+		update_trigger_internals();
+	}
+}
+
+
+void update_trigger_internals() {
+	for (int ch = 0; ch < (int)g_channels.size(); ch++) {
+		char dir = 'X';
+		if (g_selectedTriggerChannel == ch) {
+			if (g_selectedTriggerDirection == RISING)
+				dir = 'R';
+			else if (g_selectedTriggerDirection == FALLING)
+				dir = 'F';
+			else if (g_selectedTriggerDirection == ANY)
+				dir = 'C';
+		}
+
+		ds_trigger_probe_set(ch, dir, 'X');
+	}
 }
 
 int count_enabled_channels() {
@@ -53,6 +95,11 @@ void compute_scale_and_offset(struct sr_channel* ch, float& scale, float& offset
 	scale = -1 * hwrange_factor / 255.f * full_throw_V; // ADC values are 'upside down'
 	offset = 127 * scale; // Zero is 127
 }
+
+enum LANGUAGE {
+    LANGUAGE_CN = 25,
+    LANGUAGE_EN = 31,
+};
 
 int init_and_find_device() {
 	int err;
@@ -110,9 +157,34 @@ int init_and_find_device() {
 
 	ds_trigger_init();
 
-	// Relevant on DSLogic. Let's work in non-stream mode for now.
-	// This is also required for non 0% delay
-	set_dev_config<bool>(g_sr_device, SR_CONF_STREAM, false);
+	LogDebug("Initial language: %d; ", get_dev_config<int16_t>(g_sr_device, SR_CONF_LANGUAGE).value());
+
+	set_dev_config<int16_t>(g_sr_device, SR_CONF_LANGUAGE, LANGUAGE_EN);
+
+	LogDebug("Configured language: %d\n", get_dev_config<int16_t>(g_sr_device, SR_CONF_LANGUAGE).value());
+
+	for (std::string opt : get_dev_config_options<std::string>(g_sr_device, SR_CONF_OPERATION_MODE))
+	{
+		LogDebug(" - available operation mode: %s\n", opt.c_str());
+	}
+
+	LogDebug("Initial op mode: %s; stream = %d\n",
+		get_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE).value().c_str(),
+		get_dev_config<bool>(g_sr_device, SR_CONF_STREAM).value());
+
+	// This is required for non 0% delay
+	// TODO: What if anything does this do on DSCope? (Nothing, I think)
+	// TODO: Try "Internal Test"
+	set_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE, "Buffer Mode");
+
+	LogDebug("Configured op mode: %s; stream = %d\n",
+		get_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE).value().c_str(),
+		get_dev_config<bool>(g_sr_device, SR_CONF_STREAM).value());
+
+	ds_trigger_set_mode(SIMPLE_TRIGGER);
+	ds_trigger_set_en(true);
+	// ds_trigger_probe_set(0, 'R', 'X'); // ch0 'R'ising edge ('X' = ignore, what the arg does idk.) All active (non-'X') triggers ANDed together
+	// ds_trigger_set_pos(50); // %
 
 	uint8_t numbits = get_dev_config<uint8_t>(g_sr_device, SR_CONF_UNIT_BITS).value();
 	LogDebug("Sample bits: %d\n", numbits);
@@ -218,5 +290,13 @@ void set_trigfs(uint64_t fs) {
 	// LogWarning("samples=%lu, hz=%lu, fsper=%lu, fsinfull=%lu, pct=%f\n", 
 	// 	samples_in_full_capture, samplerate_hz, fs_per_sample, fs_in_full_capture, pct);
 
-	set_dev_config<uint8_t>(g_sr_device, SR_CONF_HORIZ_TRIGGERPOS, g_trigpct);
+	if (pct > 100 || pct < 0) {
+		set_trigfs(0);
+		return;
+	}
+
+	if (g_deviceIsScope)
+		set_dev_config<uint8_t>(g_sr_device, SR_CONF_HORIZ_TRIGGERPOS, g_trigpct);
+	else
+		ds_trigger_set_pos(g_trigpct);
 }

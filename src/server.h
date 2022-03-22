@@ -30,12 +30,20 @@ extern bool g_capturedFirstFrame;
 extern bool g_deviceIsScope;
 
 extern int g_selectedTriggerChannel;
+extern int g_selectedTriggerDirection;
 extern int g_numdivs;
+
+enum trigger_direction {
+	RISING,
+	FALLING,
+	ANY
+};
 
 int init_and_find_device();
 void compute_scale_and_offset(struct sr_channel* ch, float& scale, float& offset);
 int count_enabled_channels();
 void set_trigger_channel(int ch);
+void set_trigger_direction(int direction);
 void force_correct_config();
 void set_rate(uint64_t rate);
 void set_depth(uint64_t depth);

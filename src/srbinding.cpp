@@ -10,15 +10,20 @@
  X(uint64_t, UINT64, uint64) \
  X(uint32_t, UINT32, uint32) \
  X(uint16_t, UINT16, uint16) \
+ X(int16_t, INT16, int16) \
  X(uint8_t, BYTE, byte) \
  X(bool, BOOLEAN, boolean) \
- X(double, DOUBLE, double)
+ X(double, DOUBLE, double) \
+ X(std::string, STRING, string)
 
 template <typename T>
 bool extract_gvar(GVariant* gvar, T& result);
 
 template <typename T>
 GVariant* make_gvar(T value);
+
+#define g_variant_get_string(X) std::string(g_variant_get_string(X, NULL))
+#define g_variant_new_string(X) g_variant_new_string(X.c_str())
 
 #define X_MAKE_SPEC(CTYPE, GTYPELIT, GTYPEFUNC) \
 template <> \

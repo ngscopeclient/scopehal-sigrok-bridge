@@ -65,6 +65,7 @@ float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint64_t trigp
 }
 
 bool g_pendingAcquisition = false;
+uint32_t g_lastTrigPos;
 
 void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafeed_packet *packet, void* client_vp) {
 	Socket* client = (Socket*) client_vp;
@@ -80,13 +81,11 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		struct ds_trigger_pos* trigger = (struct ds_trigger_pos*)packet->payload;
 		(void) trigger;
 
-		// if (trigger->status & 0x01) {
-  //           uint32_t trig_pos = trigger->real_pos;
+		if (trigger->status & 0x01) {
+            uint32_t trig_pos = trigger->real_pos;
 
-  //           g_lastTrigPos = trig_pos * 2 / count_enabled_channels();
-
-  //           LogWarning("Trigger packet; real_pos=%d, g_lastTrigPos=%d\n", trig_pos, g_lastTrigPos);
-		// }
+            g_lastTrigPos = trig_pos;
+		}
 	} else if (packet->type == SR_DF_LOGIC || packet->type == SR_DF_DSO) {
 		uint32_t seqnum = g_seqnum++;
 
@@ -127,6 +126,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
         size_t num_samples;
         vector<uint8_t*> deinterleaved_buffers;
         float trigphase = 0;
+        int32_t first_sample = 0;
 
 		if (packet->type == SR_DF_LOGIC) {
 			struct sr_datafeed_logic* logic = (struct sr_datafeed_logic*)packet->payload;
@@ -139,14 +139,6 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			// // logic->index, ->order, ->unit_size are just not initialized in libsigrok4DSL code...
 			// // ->format is always LA_CROSS_DATA
 			// // ->length appears to be in bytes
-
-			// LogDebug("logic->length = %lu\n", logic->length);
-			// LogDebug("logic->format = %d\n", logic->format);
-			// LogDebug("logic->derror = %u\n", logic->data_error);
-			// LogDebug("logic->perror = %lu\n", logic->error_pattern);
-			// LogDebug("logic->data:\n");
-
-			// uint8_t* buf = (uint8_t*)logic->data;
 
 			// // For N channels, yields 8 samples for each of the channels, then repeats
 			// // Each sample is 8 bits, with the most significant bit sampled last
@@ -165,16 +157,59 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 				}
 			}
 
-			// LogDebug("---\n");
-			// for (int i = 0; i < 16; i++) {
-			// 	printf("ch%02d: ", i);
-			// 	uint8_t* pbuf = deinterleaved_buffers[i];
-			// 	for (int b = 0; b < 40; b++) {
-			// 		printf("%02x ", *(pbuf++));
-			// 	}
+        	uint32_t nominal_trigpos_in_bytes = num_samples * g_trigpct / 100;
+        	// Where in the bitstream SHOULD the trigger be (in bytes, so x8 for samples)
 
-			// 	printf("\n");
-			// }
+        	uint32_t trigpos_in_bytes = g_lastTrigPos * 2 / count_enabled_channels();
+        	// Where in the bitstream DID the trigger happen (in bytes, so x8 for samples)
+
+			first_sample = (trigpos_in_bytes - nominal_trigpos_in_bytes) * 8;
+			// Byte-level offset for our data
+			// Now, you might think to yourself, louis, did you forget that trigpos_in_bytes could
+			// end up fractional, and maybe rounding it to an integer is why we're off by a few bits?
+			// But no. That's not it... if we allow it to be a double and then compute the offset as
+			// (trigpos_in_frac_bytes * 8) - (nominal_trigpos_in_bytes * 8) IT'S STILL OFF BY A
+			// SAMPLE OR TWO sometimes!! So instead we do the following:
+
+			uint8_t that_byte = deinterleaved_buffers[0][trigpos_in_bytes];
+			// Get the byte that the transition occurred during
+
+			if (that_byte == 0 || that_byte == 255) {
+				;
+				// Transition must have occurred between last bit of last octet
+				// and now, no bit adjustment.
+			} else {
+				bool sought;
+
+				if (g_selectedTriggerDirection == RISING) {
+					sought = 1;
+					// Looking for first high bit
+				} else if (g_selectedTriggerDirection == FALLING) {
+					sought = 0;
+					// Looking for first low bit
+				} else {
+					// ANY transition. We know since it's not 0 or 255 that there MUST be a
+					// transition somewhere IN this octet (i.e. not between last and this)
+					// so look at the first bit and see what transition we need to find.
+					if (that_byte & 1) {
+						sought = 0;
+						// First bit high, looking for transition to low
+					} else {
+						sought = 1;
+						// First bit low, looking for transition to high
+					}
+				}
+
+				// Seek through byte to find actual transition point
+				for (int i = 0; i < 8; i++) {
+					bool bit = (that_byte & (1 << i));
+					if (bit == sought) break;
+
+					first_sample++;
+				}
+			}
+
+			first_sample *= -1;
 
 		} else { // DSO
 			struct sr_datafeed_dso* dso = (struct sr_datafeed_dso*)packet->payload;
@@ -183,25 +218,21 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 			uint8_t* buf = (uint8_t*) dso->data;
 
-			if (numchans == 1) {
-				deinterleaved_buffers.push_back(buf);
-			} else {
-				for (int i = 0; i < numchans; i++) {
-					deinterleaved_buffers.push_back(new uint8_t[num_samples]);
-				}
+			for (int i = 0; i < numchans; i++) {
+				deinterleaved_buffers.push_back(new uint8_t[num_samples]);
+			}
 
-				uint8_t* p = buf;
-				for (size_t sample = 0; sample < num_samples; sample++) {
-					for (int ch = 0; ch < numchans; ch++) {
-						deinterleaved_buffers[ch][sample] = *p;
-						p++;
-					}
+			uint8_t* p = buf;
+			for (size_t sample = 0; sample < num_samples; sample++) {
+				for (int ch = 0; ch < numchans; ch++) {
+					deinterleaved_buffers[ch][sample] = *p;
+					p++;
 				}
 			}
 
-			uint64_t trigpos_in_samples = num_samples * g_trigpct / 100;
+        	uint32_t nominal_trigpos_in_samples = num_samples * g_trigpct / 100;
 
-			trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], deinterleaved_buffers[g_selectedTriggerChannel], trigpos_in_samples);
+			trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], deinterleaved_buffers[g_selectedTriggerChannel], nominal_trigpos_in_samples);
 			if (trigphase == 999) trigphase = 0;
 			// trigphase needs to come from the channel that the trigger is on for all channels.
 			// TODO: does this mean we need to offset the other channel by samplerate_fs/2 though if the
@@ -238,6 +269,8 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 				float config[3] = {scale, offset, trigphase};
 				client->SendLooped((uint8_t*)&config, sizeof(config));
+			} else {
+				client->SendLooped((uint8_t*)&first_sample, sizeof(first_sample));
 			}
 
 			//Send the actual waveform data

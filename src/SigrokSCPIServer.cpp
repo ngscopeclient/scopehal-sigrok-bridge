@@ -355,18 +355,20 @@ void SigrokSCPIServer::SetTriggerLevel(double level_V)
  */
 void SigrokSCPIServer::SetEdgeTriggerEdge(const std::string& edge)
 {
-	int sr_edge = -1;
+	int dir = -1;
 
 	if (edge == "RISING") {
-		sr_edge = DSO_TRIGGER_RISING;
+		dir = RISING;
 	} else if (edge == "FALLING") {
-		sr_edge = DSO_TRIGGER_FALLING;
+		dir = FALLING;
+	} else if (edge == "ANY" && !g_deviceIsScope) {
+		dir = ANY;
 	} else {
 		LogWarning("Unsupported trigger EDGE: %s\n", edge.c_str());
 		return;
 	}
 
-	set_dev_config<uint8_t>(g_sr_device, SR_CONF_TRIGGER_SLOPE, sr_edge);
+	set_trigger_direction(dir);
 
 	LogDebug("Set trigger EDGE to %s\n", edge.c_str());
 }
