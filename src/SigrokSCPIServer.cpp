@@ -143,6 +143,32 @@ bool SigrokSCPIServer::OnCommand(
 	if(BridgeSCPIServer::OnCommand(line, subject, cmd, args))
 		return true;
 
+	size_t channelId;
+
+	if (GetChannelID(subject, channelId)) {
+		ChannelType channelType = GetChannelType(channelId);
+
+		if (cmd == "ATTEN" && channelType == CH_ANALOG && args.size() == 1) {
+			double arg;
+			if (ParseDouble(args[0], arg)) {
+				int ifactor = -1;
+				if (arg == 1) ifactor = 1;
+				else if (arg == 10) ifactor = 10;
+				else if (arg == 100) ifactor = 100;
+				else goto unknown;
+
+				g_attenuations[channelId] = ifactor;
+        		// set_probe_config<uint64_t>(g_sr_device, g_channels[channelId], SR_CONF_PROBE_FACTOR, ifactor);
+				LogDebug("Updated ATTEN for %s, now %d\n", subject.c_str(), ifactor);
+				return true;
+			}
+			else
+				goto unknown;
+		}
+	}
+
+	unknown:
+
 	//TODO: handle commands not implemented by the base class
 	LogWarning("Unrecognized command received: %s\n", line.c_str());
 

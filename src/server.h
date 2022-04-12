@@ -22,6 +22,7 @@ extern vector<uint64_t> vdiv_options;
 extern uint64_t g_rate, g_depth, g_trigfs;
 extern uint64_t g_hw_depth;
 extern uint8_t g_trigpct;
+extern vector<uint64_t> g_attenuations;
 
 extern bool g_quit;
 extern bool g_run;
@@ -29,7 +30,6 @@ extern bool g_running;
 extern bool g_oneShot;
 extern bool g_capturedFirstFrame;
 extern bool g_deviceIsScope;
-
 
 extern uint64_t g_session_start_ms;
 extern uint32_t g_seqnum;

@@ -11,6 +11,7 @@ struct sr_session* g_sr_session = NULL;
 
 std::vector<struct sr_channel*> g_channels{};
 std::vector<uint64_t> vdiv_options{};
+std::vector<uint64_t> g_attenuations{};
 
 bool g_quit;
 bool g_run;
@@ -92,12 +93,20 @@ int count_enabled_channels() {
 
 void compute_scale_and_offset(struct sr_channel* ch, float& scale, float& offset) {
 	float vdiv_mV = get_probe_config<uint64_t>(g_sr_device, ch, SR_CONF_PROBE_VDIV).value();
+
 	float hwmin = get_dev_config<uint32_t>(g_sr_device, SR_CONF_REF_MIN).value_or(0);
 	float hwmax = get_dev_config<uint32_t>(g_sr_device, SR_CONF_REF_MAX).value_or((1 << 8) - 1);
+	// TODO: Actual ADC samples on my DSCope extend to 0x03 and 0xFC (this reports 0x0A - 0xF5)...
+	//       ignoring for now. Is that only in overload conditions?
+
 	float full_throw_V = vdiv_mV / 1000 * g_numdivs;  // Volts indicated by most-positive value (255)
 	float hwrange_factor = (255.f / (hwmax - hwmin)); // Adjust for incomplete range of ADC reports
 	scale = -1 * hwrange_factor / 255.f * full_throw_V; // ADC values are 'upside down'
-	offset = 127 * scale; // Zero is 127
+	offset = 128 * scale; // Zero is 128
+
+	// TODO: In fact, as vertical scale zooms out (vdiv_mV increases) the ADC samples seem to become
+	//       more and more biased towards negative... this is observable in DSView too, so may just
+	//       be a result of the hardware design. Not attempting to compensate for now.
 }
 
 // Not exposed from the DSL driver code, so copied here...
@@ -202,6 +211,7 @@ int init_and_find_device(const char* wanted_driver, int req_usb_bus, int req_usb
 	for (GSList *l = g_sr_device->channels; l; l = l->next) {
         struct sr_channel* ch = (struct sr_channel*)l->data;
         g_channels.push_back(ch);
+        g_attenuations.push_back(1);
     }
 
     LogDebug("Device has %ld channels\n", g_channels.size());
@@ -237,6 +247,7 @@ int init_and_find_device(const char* wanted_driver, int req_usb_bus, int req_usb
     set_trigger_channel(0);
     set_rate(10000000);
     set_depth(1000);
+
 
     return 0;
 }
@@ -280,6 +291,10 @@ void force_correct_config() {
 	set_rate(g_rate);
 	set_depth(g_depth);
 	set_trigfs(g_trigfs);
+
+	
+    set_probe_config<uint64_t>(g_sr_device, g_channels[0], SR_CONF_PROBE_FACTOR, 10);
+    set_probe_config<uint64_t>(g_sr_device, g_channels[1], SR_CONF_PROBE_FACTOR, 1);
 
 	bool wasRunning = stop_capture_sync();
 	if (wasRunning) restart_capture();

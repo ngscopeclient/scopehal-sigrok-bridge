@@ -186,6 +186,14 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 				}
 			}
 
+			// for (int i = 0; i < numchans; i++) {
+			// 	printf(" ADC samples ch%d: ", i);
+			// 	for (int x = 0; x < 16; x++) {
+			// 		printf("%02x ", deinterleaved_buffers[i][x]);
+			// 	}
+			// 	printf("\n");
+			// }
+
         	uint32_t nominal_trigpos_in_samples = num_samples * g_trigpct / 100;
 
 			trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], deinterleaved_buffers[g_selectedTriggerChannel], nominal_trigpos_in_samples);
