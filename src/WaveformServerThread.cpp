@@ -1,5 +1,6 @@
 
 #include <thread>
+#include <atomic>
 
 #include "server.h"
 #include "xptools/Socket.h"
@@ -7,9 +8,13 @@
 #include "srbinding.h"
 
 uint64_t g_session_start_ms;
-uint32_t g_seqnum = 0;
+uint32_t g_hwSeqNum = 0;
 double g_lastReportedRate;
 uint32_t g_lastTrigPos;
+
+int64_t g_currSeqNum = 0;
+std::atomic<int64_t> g_lastAcked = 0;
+std::atomic<int64_t> g_windowSize = 1;
 
 uint64_t get_ms() {
 	auto millisec_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -87,7 +92,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
             g_lastTrigPos = trig_pos;
 		}
 	} else if (packet->type == SR_DF_LOGIC || packet->type == SR_DF_DSO) {
-		uint32_t seqnum = g_seqnum++;
+		uint32_t hwSeqnum = g_hwSeqNum++;
 
 		g_capturedFirstFrame = true;
 
@@ -97,12 +102,17 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		}
 		// Don't send further data packets after stop requested
 
-		if (!g_pendingAcquisition) {
-			// LogWarning("Feed: !g_pendingAcquisition; ignoring to avoid buffering\n");
+		int64_t outstanding = g_currSeqNum - g_lastAcked;
+
+		// LogDebug("curr = %d, lastAcked = %d, outstanding = %d, wsize = %d\n", (int)g_currSeqNum, (int)g_lastAcked, (int)outstanding, (int)g_windowSize);
+
+		if (outstanding >= g_windowSize) {
+			// Drop to avoid overfilling TCP buffer
+			// LogDebug(" (drop)\n");
 			return;
 		}
 
-		g_pendingAcquisition = false;
+		g_currSeqNum++;
 
 		vector<int> sample_channels;
 		int chindex = 0;
@@ -210,7 +220,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			// ADC sample is 180deg out of phase?
 		}
 
-		client->SendLooped((uint8_t*)&seqnum, sizeof(seqnum));
+		client->SendLooped((uint8_t*)&g_currSeqNum, sizeof(g_currSeqNum));
 
 		client->SendLooped((uint8_t*)&numchans, sizeof(numchans));
 
@@ -222,8 +232,8 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		if ((delta_s - g_lastReportedRate) > 10) {
 			g_lastReportedRate = delta_s;
 
-			double wfms_s = seqnum / delta_s;
-			LogDebug("WaveformServerThread/bus: Seq#%u: %lu samples on %d channels, HW WFMs/s=%f\n", seqnum, num_samples, numchans, wfms_s);
+			double wfms_s = hwSeqnum / delta_s;
+			LogDebug("WaveformServerThread/bus: HWSeq#%u: %lu samples on %d channels, HW WFMs/s=%f\n", hwSeqnum, num_samples, numchans, wfms_s);
 		}
 
 		chindex = 0;
@@ -265,16 +275,17 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 	}
 }
 
-void syncWaitThread(Socket* client) {
+void readAckThread(Socket* client) {
 	for (;;) {
-		uint8_t r = '0';
-		client->RecvLooped(&r, 1);
-		if (r != 'K') {
-			// Disconnected
-			return;
+		int64_t state[2];
+
+		if (!client->RecvLooped((uint8_t*)&state, sizeof(state))) {
+			LogError("Failed to receive ACK; disconnected.\n");
+			std::terminate();
 		}
 
-		g_pendingAcquisition = true;
+		g_windowSize = state[1];
+		g_lastAcked = state[0];
 	}
 }
 
@@ -294,7 +305,7 @@ void WaveformServerThread()
 
 	sr_session_datafeed_callback_add(waveform_callback, &client);
 
-	std::thread dataThread(syncWaitThread, &client);
+	std::thread dataThread(readAckThread, &client);
 
 	for (;;) {
 		if (g_quit) {

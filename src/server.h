@@ -32,7 +32,7 @@ extern bool g_capturedFirstFrame;
 extern bool g_deviceIsScope;
 
 extern uint64_t g_session_start_ms;
-extern uint32_t g_seqnum;
+extern uint32_t g_hwSeqNum;
 extern double g_lastReportedRate;
 extern uint32_t g_lastTrigPos;
 

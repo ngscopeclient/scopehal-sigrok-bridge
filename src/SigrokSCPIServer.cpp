@@ -185,7 +185,7 @@ void SigrokSCPIServer::AcquisitionStart(bool oneShot)
 
 	g_oneShot = oneShot;
 
-	g_seqnum = 0;
+	g_hwSeqNum = 0;
 	g_session_start_ms = get_ms();
 	g_lastReportedRate = 0;
 
