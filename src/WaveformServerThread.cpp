@@ -129,6 +129,8 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
         vector<uint8_t*> deinterleaved_buffers;
         float trigphase = 0;
         int32_t first_sample = 0;
+        vector<bool> clipping;
+        for (int ch = 0; ch < numchans; ch++) clipping.push_back(false);
 
 		if (packet->type == SR_DF_LOGIC) {
 			struct sr_datafeed_logic* logic = (struct sr_datafeed_logic*)packet->payload;
@@ -181,7 +183,12 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			uint8_t* p = buf;
 			for (size_t sample = 0; sample < num_samples; sample++) {
 				for (int ch = 0; ch < numchans; ch++) {
-					deinterleaved_buffers[ch][sample] = *p;
+					uint8_t d = *p;
+					if (d <= g_hwmin || d >= g_hwmax) {
+						clipping[ch] = true;
+					}
+
+					deinterleaved_buffers[ch][sample] = d;
 					p++;
 				}
 			}
@@ -233,6 +240,9 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 				float config[3] = {scale, offset, trigphase};
 				client->SendLooped((uint8_t*)&config, sizeof(config));
+
+				bool ch_clipping = clipping[chindex];
+				client->SendLooped((uint8_t*)&ch_clipping, sizeof(ch_clipping));
 			} else {
 				client->SendLooped((uint8_t*)&first_sample, sizeof(first_sample));
 			}

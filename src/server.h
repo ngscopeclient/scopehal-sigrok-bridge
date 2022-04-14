@@ -41,6 +41,8 @@ uint64_t get_ms();
 extern int g_selectedTriggerChannel;
 extern int g_selectedTriggerDirection;
 extern int g_numdivs;
+extern uint32_t g_hwmin, g_hwmax;
+extern float g_hwrange_factor;
 
 enum trigger_direction {
 	RISING,

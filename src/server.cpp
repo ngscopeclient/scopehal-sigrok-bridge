@@ -28,6 +28,8 @@ uint8_t g_trigpct = 0;
 int g_selectedTriggerChannel;
 int g_selectedTriggerDirection;
 int g_numdivs = DS_CONF_DSO_VDIVS;
+uint32_t g_hwmin, g_hwmax;
+float g_hwrange_factor;
 // TODO: SR_CONF_NUM_VDIV instead of DS_CONF_DSO_VDIVS on regular sigrok
 
 void update_trigger_internals();
@@ -94,14 +96,9 @@ int count_enabled_channels() {
 void compute_scale_and_offset(struct sr_channel* ch, float& scale, float& offset) {
 	float vdiv_mV = get_probe_config<uint64_t>(g_sr_device, ch, SR_CONF_PROBE_VDIV).value();
 
-	float hwmin = get_dev_config<uint32_t>(g_sr_device, SR_CONF_REF_MIN).value_or(0);
-	float hwmax = get_dev_config<uint32_t>(g_sr_device, SR_CONF_REF_MAX).value_or((1 << 8) - 1);
-	// TODO: Actual ADC samples on my DSCope extend to 0x03 and 0xFC (this reports 0x0A - 0xF5)...
-	//       ignoring for now. Is that only in overload conditions?
-
 	float full_throw_V = vdiv_mV / 1000 * g_numdivs;  // Volts indicated by most-positive value (255)
-	float hwrange_factor = (255.f / (hwmax - hwmin)); // Adjust for incomplete range of ADC reports
-	scale = -1 * hwrange_factor / 255.f * full_throw_V; // ADC values are 'upside down'
+	// g_hwrange_factor adjusts for incomplete range of ADC reports
+	scale = -1 * g_hwrange_factor / 255.f * full_throw_V; // ADC values are 'upside down'
 	offset = 128 * scale; // Zero is 128
 
 	// TODO: In fact, as vertical scale zooms out (vdiv_mV increases) the ADC samples seem to become
@@ -230,6 +227,11 @@ int init_and_find_device(const char* wanted_driver, int req_usb_bus, int req_usb
 
 	if (g_deviceIsScope) {
 		vdiv_options = get_dev_config_options<uint64_t>(g_sr_device, SR_CONF_PROBE_VDIV);
+		LogDebug("vdiv options: ");
+		for (auto opt : vdiv_options) {
+			LogDebug("%ld (%.1fV), ", opt, ((float)opt)/1000*g_numdivs);
+		}
+		LogDebug("\n");
 	} else {
 		set_dev_config<std::string>(g_sr_device, SR_CONF_OPERATION_MODE, "Buffer Mode");
 
@@ -242,7 +244,17 @@ int init_and_find_device(const char* wanted_driver, int req_usb_bus, int req_usb
 	}
 
 	g_hw_depth = get_dev_config<uint64_t>(g_sr_device, SR_CONF_HW_DEPTH).value();
-	LogDebug("Hardware depth limit: %lu (1<<%d)\n", g_hw_depth, (int)log2(g_hw_depth));
+	// LogDebug("Hardware depth limit: %lu (1<<%d)\n", g_hw_depth, (int)log2(g_hw_depth));
+	// This seems like a meaningless number (way too high)
+
+	g_hwmin = get_dev_config<uint32_t>(g_sr_device, SR_CONF_REF_MIN).value_or(0);
+	g_hwmax = get_dev_config<uint32_t>(g_sr_device, SR_CONF_REF_MAX).value_or((1 << 8) - 1);
+	g_hwrange_factor = (255.f / (g_hwmax - g_hwmin));
+	// TODO: Actual ADC samples on my DSCope extend to 0x03 and 0xFC (this reports 0x0A - 0xF5)...
+	//       ignoring for now / treating that as clipping.
+	LogDebug("Hardware ADC report range: %02x - %02x (adj: %.3f)\n", g_hwmin, g_hwmax, g_hwrange_factor);
+	if (g_hwmin != 0 && g_hwmax != 255) LogDebug(" (Clipping detection supported)\n");
+
 
     set_trigger_channel(0);
     set_rate(10000000);
