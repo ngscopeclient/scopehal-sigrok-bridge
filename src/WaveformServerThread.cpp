@@ -1,6 +1,7 @@
 
 #include <thread>
 #include <atomic>
+#include <deque>
 
 #include "server.h"
 #include "xptools/Socket.h"
@@ -12,9 +13,11 @@ uint32_t g_hwSeqNum = 0;
 double g_lastReportedRate;
 uint32_t g_lastTrigPos;
 
-int64_t g_currSeqNum = 0;
-std::atomic<int64_t> g_lastAcked = 0;
-std::atomic<int64_t> g_windowSize = 1;
+uint64_t g_lastSent = 0;
+uint64_t g_averageAckTime = 50;
+std::deque<uint64_t> g_pastAckTimes;
+std::atomic<uint64_t> g_lastAcked = 0;
+std::atomic<uint64_t> g_windowSize = 100;
 
 uint64_t get_ms() {
 	auto millisec_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -93,8 +96,11 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		}
 	} else if (packet->type == SR_DF_LOGIC || packet->type == SR_DF_DSO) {
 		uint32_t hwSeqnum = g_hwSeqNum++;
+		uint64_t now = get_ms();
 
-		g_capturedFirstFrame = true;
+		if (!g_capturedFirstFrame) {
+			g_capturedFirstFrame = true;
+		}
 
 		if (!g_run) {
 			LogWarning("Feed: !g_run; ignoring\n");
@@ -102,17 +108,18 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		}
 		// Don't send further data packets after stop requested
 
-		int64_t outstanding = g_currSeqNum - g_lastAcked;
+		uint64_t outstanding = g_lastSent - g_lastAcked;
 
-		// LogDebug("curr = %d, lastAcked = %d, outstanding = %d, wsize = %d\n", (int)g_currSeqNum, (int)g_lastAcked, (int)outstanding, (int)g_windowSize);
+		LogDebug("lastSent = %d, lastAcked = %d, outstanding = %d\n", (int)g_lastSent, (int)g_lastAcked, (int)outstanding);
+		LogDebug("wSize = %d, averageAck = %d\n", (int)g_windowSize, (int)g_averageAckTime);
 
-		if (outstanding >= g_windowSize) {
+		if (outstanding > std::min(g_averageAckTime, (uint64_t)g_windowSize)) {
 			// Drop to avoid overfilling TCP buffer
-			// LogDebug(" (drop)\n");
+			LogDebug("   (drop)\n");
 			return;
 		}
 
-		g_currSeqNum++;
+		g_lastSent = now;
 
 		vector<int> sample_channels;
 		int chindex = 0;
@@ -220,14 +227,14 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 			// ADC sample is 180deg out of phase?
 		}
 
-		client->SendLooped((uint8_t*)&g_currSeqNum, sizeof(g_currSeqNum));
+		client->SendLooped((uint8_t*)&now, sizeof(now));
 
 		client->SendLooped((uint8_t*)&numchans, sizeof(numchans));
 
 		int64_t samplerate_fs = 1000000000000000 / samplerate_hz;
 		client->SendLooped((uint8_t*)&samplerate_fs, sizeof(samplerate_fs));
 
-		double delta_s = ((double)(get_ms() - g_session_start_ms)) / 1000;
+		double delta_s = ((double)(now - g_session_start_ms)) / 1000;
 
 		if ((delta_s - g_lastReportedRate) > 10) {
 			g_lastReportedRate = delta_s;
@@ -284,8 +291,16 @@ void readAckThread(Socket* client) {
 			std::terminate();
 		}
 
+		uint64_t newAck = state[0];
+		uint64_t delta = std::min(newAck - g_lastAcked, (uint64_t)1000);
+
+		g_pastAckTimes.push_back(delta);
+		g_averageAckTime += delta / 10;
+		g_averageAckTime -= g_pastAckTimes.front() / 10;
+		g_pastAckTimes.pop_front();
+
 		g_windowSize = state[1];
-		g_lastAcked = state[0];
+		g_lastAcked = newAck;
 	}
 }
 
@@ -294,6 +309,10 @@ void WaveformServerThread()
 	#ifdef __linux__
 	pthread_setname_np(pthread_self(), "WaveformServerThread");
 	#endif
+
+	for (int i = 0; i < 10; i++) {
+		g_pastAckTimes.push_back(g_averageAckTime);
+	}
 
 	Socket client = g_dataSocket.Accept();
 	LogVerbose("Client connected to data plane socket\n");
