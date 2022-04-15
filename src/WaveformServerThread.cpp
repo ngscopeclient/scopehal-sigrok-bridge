@@ -13,11 +13,6 @@ uint32_t g_hwSeqNum = 0;
 double g_lastReportedRate;
 uint32_t g_lastTrigPos;
 
-uint64_t g_lastSent = 0;
-uint64_t g_averageAckTime = 50;
-std::deque<uint64_t> g_pastAckTimes;
-std::atomic<uint64_t> g_lastAcked = 0;
-std::atomic<uint64_t> g_windowSize = 100;
 
 uint64_t get_ms() {
 	auto millisec_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -75,6 +70,8 @@ float InterpolateTriggerTime(struct sr_channel *ch, uint8_t* buf, uint64_t trigp
 
 bool g_pendingAcquisition = false;
 
+bool CalcFlowControlShouldDrop(uint64_t now);
+
 void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafeed_packet *packet, void* client_vp) {
 	Socket* client = (Socket*) client_vp;
 
@@ -108,18 +105,9 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		}
 		// Don't send further data packets after stop requested
 
-		uint64_t outstanding = g_lastSent - g_lastAcked;
-
-		LogDebug("lastSent = %d, lastAcked = %d, outstanding = %d\n", (int)g_lastSent, (int)g_lastAcked, (int)outstanding);
-		LogDebug("wSize = %d, averageAck = %d\n", (int)g_windowSize, (int)g_averageAckTime);
-
-		if (outstanding > std::min(g_averageAckTime, (uint64_t)g_windowSize)) {
-			// Drop to avoid overfilling TCP buffer
-			LogDebug("   (drop)\n");
+		if (CalcFlowControlShouldDrop(now)) {
 			return;
 		}
-
-		g_lastSent = now;
 
 		vector<int> sample_channels;
 		int chindex = 0;
@@ -282,26 +270,95 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 	}
 }
 
+uint64_t g_lastSent = 0;
+double g_averageAckTime = 1000./60.;
+#define ACKTIMES_SIZE 20
+std::deque<double> g_pastAckTimes;
+std::atomic<uint64_t> g_lastAcked = 0;
+uint64_t lastAckTime = 0;
+
 void readAckThread(Socket* client) {
 	for (;;) {
-		int64_t state[2];
+		uint64_t message[2];
 
-		if (!client->RecvLooped((uint8_t*)&state, sizeof(state))) {
+		if (!client->RecvLooped((uint8_t*)&message, sizeof(message))) {
 			LogError("Failed to receive ACK; disconnected.\n");
 			std::terminate();
 		}
 
-		uint64_t newAck = state[0];
-		uint64_t delta = std::min(newAck - g_lastAcked, (uint64_t)1000);
+		uint64_t newAck = message[0];
+
+		uint64_t now = get_ms();
+
+		uint64_t delta = std::min(now - lastAckTime, (uint64_t)1000);
+		lastAckTime = now;
 
 		g_pastAckTimes.push_back(delta);
-		g_averageAckTime += delta / 10;
-		g_averageAckTime -= g_pastAckTimes.front() / 10;
+		g_averageAckTime += (double)delta / (double)ACKTIMES_SIZE;
+		g_averageAckTime -= g_pastAckTimes.front() / (double)ACKTIMES_SIZE;
 		g_pastAckTimes.pop_front();
 
-		g_windowSize = state[1];
 		g_lastAcked = newAck;
 	}
+}
+
+std::mutex hwRateLock;
+double avgHwRate = 1000./60.;
+std::deque<double> pastHwRates;
+uint64_t last_hw_frame;
+
+#define NUM_DIVSORS 64
+uint64_t counters[NUM_DIVSORS] = {0};
+
+int lastReportTime = -1;
+
+bool CalcFlowControlShouldDrop(uint64_t now) {
+	// uint64_t outstanding = g_lastSent - g_lastAcked;
+
+	std::lock_guard<std::mutex> lock(hwRateLock);
+
+	uint64_t hw_rate = now - last_hw_frame;
+	
+	last_hw_frame = now;
+	
+	pastHwRates.push_back(hw_rate);
+	avgHwRate += (double)hw_rate / (double)ACKTIMES_SIZE;
+	avgHwRate -= pastHwRates.front() / (double)ACKTIMES_SIZE;
+	pastHwRates.pop_front();
+
+	// LogDebug("hwRate = %f (i.e. %fWFM/s)\n", avgHwRate, 1000./(float)avgHwRate);
+
+	if (time(NULL) % 10 == 0 && lastReportTime != time(NULL) / 10) {
+		lastReportTime = time(NULL) / 10;
+		LogDebug("averageAck = %f (i.e. %fWFM/s)\n", g_averageAckTime, 1000./(float)g_averageAckTime);
+	}
+
+
+	double pct = avgHwRate / (g_averageAckTime*0.8);
+	bool proceed = false;
+
+	// LogDebug("pct = %f = ", pct);
+
+	int div = 1;
+	while (div < NUM_DIVSORS) {
+		if (pct - (1./(double)div) > 0) {
+			// LogDebug("1/%d + ", div);
+			pct -= 1./(double)div;
+			proceed |= (counters[div]++ % div) == 0;
+			if (proceed) break;
+		}
+		div++;
+	}
+
+	// LogDebug("... (%f left) p = %d\n", pct, proceed);
+
+	if (!proceed) {
+		return true;
+	}
+
+	g_lastSent = now;
+
+	return false;
 }
 
 void WaveformServerThread()
@@ -310,8 +367,9 @@ void WaveformServerThread()
 	pthread_setname_np(pthread_self(), "WaveformServerThread");
 	#endif
 
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < ACKTIMES_SIZE; i++) {
 		g_pastAckTimes.push_back(g_averageAckTime);
+		pastHwRates.push_back(avgHwRate);
 	}
 
 	Socket client = g_dataSocket.Accept();
@@ -322,9 +380,11 @@ void WaveformServerThread()
 	if(!client.DisableNagle())
 		LogWarning("Failed to disable Nagle on socket, performance may be poor\n");
 
-	sr_session_datafeed_callback_add(waveform_callback, &client);
-
 	std::thread dataThread(readAckThread, &client);
+
+	usleep(1000);
+
+	sr_session_datafeed_callback_add(waveform_callback, &client);
 
 	for (;;) {
 		if (g_quit) {
@@ -338,6 +398,8 @@ void WaveformServerThread()
 
 		g_running = true;
 		g_capturedFirstFrame = false;
+		g_lastAcked = get_ms();
+		last_hw_frame = get_ms();
 
 		int err;
 		if ((err = sr_session_start()) != SR_OK) {
