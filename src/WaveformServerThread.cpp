@@ -10,6 +10,7 @@
 
 uint64_t g_session_start_ms;
 uint32_t g_hwSeqNum = 0;
+uint32_t g_swSeqNum = 0;
 double g_lastReportedRate;
 uint32_t g_lastTrigPos;
 
@@ -274,7 +275,6 @@ uint64_t g_lastSent = 0;
 double g_averageAckTime = 1000./60.;
 #define ACKTIMES_SIZE 20
 std::deque<double> g_pastAckTimes;
-std::atomic<uint64_t> g_lastAcked = 0;
 uint64_t lastAckTime = 0;
 
 void readAckThread(Socket* client) {
@@ -293,12 +293,17 @@ void readAckThread(Socket* client) {
 		uint64_t delta = std::min(now - lastAckTime, (uint64_t)1000);
 		lastAckTime = now;
 
+		if (newAck == 0) {
+			LogWarning("Starve!\n");
+			delta = 0;
+		} else {
+			LogDebug("Recieve ACK; delta = %ld\n", delta);
+		}
+
 		g_pastAckTimes.push_back(delta);
 		g_averageAckTime += (double)delta / (double)ACKTIMES_SIZE;
 		g_averageAckTime -= g_pastAckTimes.front() / (double)ACKTIMES_SIZE;
 		g_pastAckTimes.pop_front();
-
-		g_lastAcked = newAck;
 	}
 }
 
@@ -307,58 +312,39 @@ double avgHwRate = 1000./60.;
 std::deque<double> pastHwRates;
 uint64_t last_hw_frame;
 
-#define NUM_DIVSORS 64
-uint64_t counters[NUM_DIVSORS] = {0};
-
-int lastReportTime = -1;
-
 bool CalcFlowControlShouldDrop(uint64_t now) {
-	// uint64_t outstanding = g_lastSent - g_lastAcked;
-
-	std::lock_guard<std::mutex> lock(hwRateLock);
-
 	uint64_t hw_rate = now - last_hw_frame;
-	
 	last_hw_frame = now;
+
+	{
+		std::lock_guard<std::mutex> lock(hwRateLock);
 	
-	pastHwRates.push_back(hw_rate);
-	avgHwRate += (double)hw_rate / (double)ACKTIMES_SIZE;
-	avgHwRate -= pastHwRates.front() / (double)ACKTIMES_SIZE;
-	pastHwRates.pop_front();
-
-	// LogDebug("hwRate = %f (i.e. %fWFM/s)\n", avgHwRate, 1000./(float)avgHwRate);
-
-	if (time(NULL) % 10 == 0 && lastReportTime != time(NULL) / 10) {
-		lastReportTime = time(NULL) / 10;
-		LogDebug("averageAck = %f (i.e. %fWFM/s)\n", g_averageAckTime, 1000./(float)g_averageAckTime);
+		pastHwRates.push_back(hw_rate);
+		avgHwRate += (double)hw_rate / (double)ACKTIMES_SIZE;
+		avgHwRate -= pastHwRates.front() / (double)ACKTIMES_SIZE;
+		pastHwRates.pop_front();
 	}
 
+	bool fallback = false;//(now - g_lastSent) > 1000;
 
-	double pct = avgHwRate / (g_averageAckTime*0.8);
-	bool proceed = false;
+	double spillPerSec = 2;
+	double biasFactor = (1000/g_averageAckTime) / ((1000/g_averageAckTime) + spillPerSec);
+	double effectiveAckTime = g_averageAckTime * biasFactor;
+	double sampleExpiry = (double)last_hw_frame + avgHwRate/2;
+	double nextPresent = g_lastSent + effectiveAckTime;
+	double difference = sampleExpiry - nextPresent;
 
-	// LogDebug("pct = %f = ", pct);
+	LogDebug("Diff = %f; fb = %d\n", difference, fallback);
+	LogDebug("effectiveAckTime = %f*%f, avgHwRate = %f\n", g_averageAckTime, biasFactor, avgHwRate);
 
-	int div = 1;
-	while (div < NUM_DIVSORS) {
-		if (pct - (1./(double)div) > 0) {
-			// LogDebug("1/%d + ", div);
-			pct -= 1./(double)div;
-			proceed |= (counters[div]++ % div) == 0;
-			if (proceed) break;
-		}
-		div++;
-	}
+	if ((difference >= 0) || fallback) {
+		// Proceed
+		g_lastSent = now + std::min(difference, 1000.);
 
-	// LogDebug("... (%f left) p = %d\n", pct, proceed);
-
-	if (!proceed) {
+		return false;
+	} else {
 		return true;
 	}
-
-	g_lastSent = now;
-
-	return false;
 }
 
 void WaveformServerThread()
@@ -398,7 +384,6 @@ void WaveformServerThread()
 
 		g_running = true;
 		g_capturedFirstFrame = false;
-		g_lastAcked = get_ms();
 		last_hw_frame = get_ms();
 
 		int err;
