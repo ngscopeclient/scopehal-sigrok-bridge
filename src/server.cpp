@@ -326,9 +326,9 @@ void set_depth(uint64_t depth) {
 
 void set_trigfs(uint64_t fs) {
 	// LogDebug("set_trigfs %lu\n", fs);
-	g_trigfs = fs;
 
 	double pct;
+	uint64_t fs_in_full_capture;
 	if (fs != 0) {
 		int numchans = count_enabled_channels();
 
@@ -341,16 +341,15 @@ void set_trigfs(uint64_t fs) {
 		}
 
 		uint64_t fs_per_sample = 1000000000000000 / samplerate_hz;
-		uint64_t fs_in_full_capture = samples_in_full_capture * fs_per_sample;
+		fs_in_full_capture = samples_in_full_capture * fs_per_sample;
 		pct = ((double)fs / (double)fs_in_full_capture) * (double)100;
 	} else {
 		pct = 0;
+		fs_in_full_capture = 0;
 	}
 
 	g_trigpct = pct;
-
-	// LogWarning("samples=%lu, hz=%lu, fsper=%lu, fsinfull=%lu, pct=%f\n", 
-	// 	samples_in_full_capture, samplerate_hz, fs_per_sample, fs_in_full_capture, pct);
+	g_trigfs = g_trigpct * fs_in_full_capture / 100;
 
 	if (pct > 100 || pct < 0) {
 		set_trigfs(0);

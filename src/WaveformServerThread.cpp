@@ -129,6 +129,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
         vector<uint8_t*> deinterleaved_buffers;
         float trigphase = 0;
         int32_t first_sample = 0;
+        uint32_t nominal_trigpos_in_samples = 0;
         vector<bool> clipping;
         for (int ch = 0; ch < numchans; ch++) clipping.push_back(false);
 
@@ -193,15 +194,9 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 				}
 			}
 
-			// for (int i = 0; i < numchans; i++) {
-			// 	printf(" ADC samples ch%d: ", i);
-			// 	for (int x = 0; x < 16; x++) {
-			// 		printf("%02x ", deinterleaved_buffers[i][x]);
-			// 	}
-			// 	printf("\n");
-			// }
-
-        	uint32_t nominal_trigpos_in_samples = num_samples * g_trigpct / 100;
+			// Why not use g_lastTrigPos? It's not updated if we update the trigger unless we stop/start capture
+			//  again.
+        	nominal_trigpos_in_samples = num_samples * g_trigpct / 100;
 
 			trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], deinterleaved_buffers[g_selectedTriggerChannel], nominal_trigpos_in_samples);
 			if (trigphase == 999) trigphase = 0;
@@ -216,6 +211,9 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 		int64_t samplerate_fs = 1000000000000000 / samplerate_hz;
 		client->SendLooped((uint8_t*)&samplerate_fs, sizeof(samplerate_fs));
+
+		uint64_t trig_fs = g_trigfs;
+		client->SendLooped((uint8_t*)&trig_fs, sizeof(trig_fs));
 
 		double delta_s = ((double)(get_ms() - g_session_start_ms)) / 1000;
 
