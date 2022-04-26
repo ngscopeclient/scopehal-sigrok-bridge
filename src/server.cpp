@@ -32,6 +32,8 @@ uint32_t g_hwmin, g_hwmax;
 float g_hwrange_factor;
 // TODO: SR_CONF_NUM_VDIV instead of DS_CONF_DSO_VDIVS on regular sigrok
 
+uint8_t g_dev_usb_bus, g_dev_usb_dev;
+
 void update_trigger_internals();
 
 void set_trigger_channel(int ch) {
@@ -176,6 +178,7 @@ int init_and_find_device(const char* wanted_driver, int req_usb_bus, int req_usb
 
 	LogNotice("Found device: %s - %s\n", g_sr_device->vendor, g_sr_device->model);
 	LogDebug(" -> USB bus %d : dev %d\n", dev_usb_bus, dev_usb_dev);
+	g_dev_usb_bus = dev_usb_bus; g_dev_usb_dev = dev_usb_dev;
 
 	if ((err = sr_dev_open(g_sr_device)) != SR_OK) {
 		LogError("Failed to sr_dev_open device: %d\n", err);

@@ -217,10 +217,13 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 		double delta_s = ((double)(get_ms() - g_session_start_ms)) / 1000;
 
+		double wfms_s = seqnum / delta_s;
+
+		client->SendLooped((uint8_t*)&wfms_s, sizeof(wfms_s));
+
 		if ((delta_s - g_lastReportedRate) > 10) {
 			g_lastReportedRate = delta_s;
 
-			double wfms_s = seqnum / delta_s;
 			LogDebug("WaveformServerThread/bus: Seq#%u: %lu samples on %d channels, HW WFMs/s=%f\n", seqnum, num_samples, numchans, wfms_s);
 		}
 
