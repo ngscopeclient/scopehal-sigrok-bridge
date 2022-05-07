@@ -88,6 +88,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		}
 	} else if (packet->type == SR_DF_LOGIC || packet->type == SR_DF_DSO) {
 		uint32_t seqnum = g_seqnum++;
+		g_hwRateClock.Tick();
 
 		g_capturedFirstFrame = true;
 
@@ -217,7 +218,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 
 		double delta_s = ((double)(get_ms() - g_session_start_ms)) / 1000;
 
-		double wfms_s = seqnum / delta_s;
+		double wfms_s = g_hwRateClock.GetAverageHz();
 
 		client->SendLooped((uint8_t*)&wfms_s, sizeof(wfms_s));
 
@@ -309,6 +310,7 @@ void WaveformServerThread()
 
 		g_running = true;
 		g_capturedFirstFrame = false;
+		g_hwRateClock.Reset();
 
 		int err;
 		if ((err = sr_session_start()) != SR_OK) {

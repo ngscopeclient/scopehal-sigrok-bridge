@@ -34,6 +34,8 @@ float g_hwrange_factor;
 
 uint8_t g_dev_usb_bus, g_dev_usb_dev;
 
+HzClock g_hwRateClock;
+
 void update_trigger_internals();
 
 void set_trigger_channel(int ch) {
