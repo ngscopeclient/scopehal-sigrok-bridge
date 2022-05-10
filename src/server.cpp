@@ -32,6 +32,10 @@ uint32_t g_hwmin, g_hwmax;
 float g_hwrange_factor;
 // TODO: SR_CONF_NUM_VDIV instead of DS_CONF_DSO_VDIVS on regular sigrok
 
+uint8_t g_dev_usb_bus, g_dev_usb_dev;
+
+HzClock g_hwRateClock;
+
 void update_trigger_internals();
 
 void set_trigger_channel(int ch) {
@@ -176,6 +180,7 @@ int init_and_find_device(const char* wanted_driver, int req_usb_bus, int req_usb
 
 	LogNotice("Found device: %s - %s\n", g_sr_device->vendor, g_sr_device->model);
 	LogDebug(" -> USB bus %d : dev %d\n", dev_usb_bus, dev_usb_dev);
+	g_dev_usb_bus = dev_usb_bus; g_dev_usb_dev = dev_usb_dev;
 
 	if ((err = sr_dev_open(g_sr_device)) != SR_OK) {
 		LogError("Failed to sr_dev_open device: %d\n", err);
@@ -326,9 +331,9 @@ void set_depth(uint64_t depth) {
 
 void set_trigfs(uint64_t fs) {
 	// LogDebug("set_trigfs %lu\n", fs);
-	g_trigfs = fs;
 
 	double pct;
+	uint64_t fs_in_full_capture;
 	if (fs != 0) {
 		int numchans = count_enabled_channels();
 
@@ -341,16 +346,15 @@ void set_trigfs(uint64_t fs) {
 		}
 
 		uint64_t fs_per_sample = 1000000000000000 / samplerate_hz;
-		uint64_t fs_in_full_capture = samples_in_full_capture * fs_per_sample;
+		fs_in_full_capture = samples_in_full_capture * fs_per_sample;
 		pct = ((double)fs / (double)fs_in_full_capture) * (double)100;
 	} else {
 		pct = 0;
+		fs_in_full_capture = 0;
 	}
 
 	g_trigpct = pct;
-
-	// LogWarning("samples=%lu, hz=%lu, fsper=%lu, fsinfull=%lu, pct=%f\n", 
-	// 	samples_in_full_capture, samplerate_hz, fs_per_sample, fs_in_full_capture, pct);
+	g_trigfs = g_trigpct * fs_in_full_capture / 100;
 
 	if (pct > 100 || pct < 0) {
 		set_trigfs(0);

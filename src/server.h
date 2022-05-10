@@ -7,6 +7,7 @@
 
 #include <libsigrok4DSL/libsigrok.h>
 #include "xptools/Socket.h"
+#include "xptools/HzClock.h"
 
 using std::vector;
 using std::mutex;
@@ -43,6 +44,10 @@ extern int g_selectedTriggerDirection;
 extern int g_numdivs;
 extern uint32_t g_hwmin, g_hwmax;
 extern float g_hwrange_factor;
+
+extern HzClock g_hwRateClock;
+
+extern uint8_t g_dev_usb_bus, g_dev_usb_dev;;
 
 enum trigger_direction {
 	RISING,

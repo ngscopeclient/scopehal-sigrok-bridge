@@ -74,7 +74,15 @@ string SigrokSCPIServer::GetModel()
 
 string SigrokSCPIServer::GetSerial()
 {
-	return "NOSERIAL";
+	char namebuf[64];
+	gethostname(namebuf, sizeof(namebuf));
+	namebuf[sizeof(namebuf)-1] = 0;
+
+	char usbbuf[64];
+	snprintf(usbbuf, sizeof(usbbuf), "%03d:%03d", g_dev_usb_bus, g_dev_usb_dev);
+	usbbuf[sizeof(usbbuf)-1] = 0;
+
+	return "USB" + string(usbbuf, strlen(usbbuf)) + "@" + string(namebuf, strlen(namebuf));
 }
 
 string SigrokSCPIServer::GetFirmwareVersion()

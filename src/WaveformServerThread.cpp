@@ -135,6 +135,7 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
         vector<uint8_t*> deinterleaved_buffers;
         float trigphase = 0;
         int32_t first_sample = 0;
+        uint32_t nominal_trigpos_in_samples = 0;
         vector<bool> clipping;
         for (int ch = 0; ch < numchans; ch++) clipping.push_back(false);
 
@@ -199,15 +200,9 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 				}
 			}
 
-			// for (int i = 0; i < numchans; i++) {
-			// 	printf(" ADC samples ch%d: ", i);
-			// 	for (int x = 0; x < 16; x++) {
-			// 		printf("%02x ", deinterleaved_buffers[i][x]);
-			// 	}
-			// 	printf("\n");
-			// }
-
-        	uint32_t nominal_trigpos_in_samples = num_samples * g_trigpct / 100;
+			// Why not use g_lastTrigPos? It's not updated if we update the trigger unless we stop/start capture
+			//  again.
+        	nominal_trigpos_in_samples = num_samples * g_trigpct / 100;
 
 			trigphase = InterpolateTriggerTime(g_channels[g_selectedTriggerChannel], deinterleaved_buffers[g_selectedTriggerChannel], nominal_trigpos_in_samples);
 			if (trigphase == 999) trigphase = 0;
@@ -224,12 +219,16 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 		client->SendLooped((uint8_t*)&samplerate_fs, sizeof(samplerate_fs));
 
 		double delta_s = ((double)(now - g_session_start_ms)) / 1000;
+		uint64_t trig_fs = g_trigfs;
+		client->SendLooped((uint8_t*)&trig_fs, sizeof(trig_fs));
+
+		double wfms_s = g_hwRateClock.GetAverageHz();
+
+		client->SendLooped((uint8_t*)&wfms_s, sizeof(wfms_s));
 
 		if ((delta_s - g_lastReportedRate) > 10) {
 			g_lastReportedRate = delta_s;
-
-			double wfms_s = hwSeqnum / delta_s;
-			LogDebug("WaveformServerThread/bus: HWSeq#%u: %lu samples on %d channels, HW WFMs/s=%f\n", hwSeqnum, num_samples, numchans, wfms_s);
+			LogDebug("WaveformServerThread/bus: Seq#%u: %lu samples on %d channels, HW WFMs/s=%f\n", hwSeqnum, num_samples, numchans, wfms_s);
 		}
 
 		chindex = 0;
@@ -272,10 +271,8 @@ void waveform_callback (const struct sr_dev_inst *device, const struct sr_datafe
 }
 
 uint64_t g_lastSent = 0;
-double g_averageAckTime = 1000./60.;
-#define ACKTIMES_SIZE 20
-std::deque<double> g_pastAckTimes;
-uint64_t lastAckTime = 0;
+HzClock g_ackClock(64);
+HzClock g_actualSendClock;
 
 void readAckThread(Socket* client) {
 	for (;;) {
@@ -288,61 +285,47 @@ void readAckThread(Socket* client) {
 
 		uint64_t newAck = message[0];
 
-		uint64_t now = get_ms();
-
-		uint64_t delta = std::min(now - lastAckTime, (uint64_t)1000);
-		lastAckTime = now;
-
 		if (newAck == 0) {
-			LogWarning("Starve!\n");
-			delta = 0;
-		} else {
-			LogDebug("Recieve ACK; delta = %ld\n", delta);
+			// LogWarning("Starve!\n");
+			g_ackClock.Tick(); // Artificial speed-up
 		}
 
-		g_pastAckTimes.push_back(delta);
-		g_averageAckTime += (double)delta / (double)ACKTIMES_SIZE;
-		g_averageAckTime -= g_pastAckTimes.front() / (double)ACKTIMES_SIZE;
-		g_pastAckTimes.pop_front();
+		g_ackClock.Tick();
 	}
 }
 
-std::mutex hwRateLock;
-double avgHwRate = 1000./60.;
-std::deque<double> pastHwRates;
-uint64_t last_hw_frame;
+uint64_t last_hw_frame = 0;
 
 bool CalcFlowControlShouldDrop(uint64_t now) {
-	uint64_t hw_rate = now - last_hw_frame;
-	last_hw_frame = now;
-
-	{
-		std::lock_guard<std::mutex> lock(hwRateLock);
-	
-		pastHwRates.push_back(hw_rate);
-		avgHwRate += (double)hw_rate / (double)ACKTIMES_SIZE;
-		avgHwRate -= pastHwRates.front() / (double)ACKTIMES_SIZE;
-		pastHwRates.pop_front();
-	}
+	g_hwRateClock.Tick();
+	float avgHwRate = g_hwRateClock.GetAverageMs();
+	float averageAckTime = g_ackClock.GetAverageMs();
+	float actualRate = g_actualSendClock.GetAverageMs();
 
 	bool fallback = false;//(now - g_lastSent) > 1000;
 
-	double spillPerSec = 2;
-	double biasFactor = (1000/g_averageAckTime) / ((1000/g_averageAckTime) + spillPerSec);
-	double effectiveAckTime = g_averageAckTime * biasFactor;
+	double spillPerSec = 4;
+	double biasFactor = (1000/averageAckTime) / ((1000/averageAckTime) + spillPerSec);
+	double effectiveAckTime = averageAckTime * biasFactor;
 	double sampleExpiry = (double)last_hw_frame + avgHwRate/2;
+	double missingGoalBy = std::min(50., std::max(0., actualRate - effectiveAckTime));
 	double nextPresent = g_lastSent + effectiveAckTime;
 	double difference = sampleExpiry - nextPresent;
 
-	LogDebug("Diff = %f; fb = %d\n", difference, fallback);
-	LogDebug("effectiveAckTime = %f*%f, avgHwRate = %f\n", g_averageAckTime, biasFactor, avgHwRate);
+	last_hw_frame = now;
 
-	if ((difference >= 0) || fallback) {
+	LogDebug("Diff = %f; fb = %d; missingBy = %f\n", difference, fallback, missingGoalBy);
+	LogDebug("effectiveAckTime = %f (%fHz)*%f = %fHz, actualRate = %fHz, avgHwRate = %f (%fHz)\n", averageAckTime, 1000./averageAckTime, biasFactor, 1000./effectiveAckTime, 1000./actualRate, avgHwRate, 1000./avgHwRate);
+
+	if ((difference + missingGoalBy >= 0) || fallback) {
 		// Proceed
-		g_lastSent = now + std::min(difference, 1000.);
+		g_lastSent = now - std::min(difference, 1000.);
+
+		g_actualSendClock.Tick();
 
 		return false;
 	} else {
+
 		return true;
 	}
 }
@@ -352,11 +335,6 @@ void WaveformServerThread()
 	#ifdef __linux__
 	pthread_setname_np(pthread_self(), "WaveformServerThread");
 	#endif
-
-	for (int i = 0; i < ACKTIMES_SIZE; i++) {
-		g_pastAckTimes.push_back(g_averageAckTime);
-		pastHwRates.push_back(avgHwRate);
-	}
 
 	Socket client = g_dataSocket.Accept();
 	LogVerbose("Client connected to data plane socket\n");
@@ -384,7 +362,10 @@ void WaveformServerThread()
 
 		g_running = true;
 		g_capturedFirstFrame = false;
-		last_hw_frame = get_ms();
+		g_hwRateClock.Reset();
+		g_ackClock.Reset();
+		g_actualSendClock.Reset();
+		last_hw_frame = 0;
 
 		int err;
 		if ((err = sr_session_start()) != SR_OK) {
